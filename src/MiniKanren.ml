@@ -968,7 +968,7 @@ module Make (Log : Logger) =
     let pqrst = five
 
     let run n goalish f =
-      let adder, currier, app_num = n () in
+      let adder, currier, app_num = n () 
       let run f = f (State.empty (), Log.empty ()) in
       run (adder goalish) |> ApplyLatest.apply app_num |> (currier f)
   end
