@@ -57,6 +57,53 @@ module Stream :
     val zip : 'a t -> 'b t -> ('a * 'b) t 
   end
 
+(** {3 Logics} *)
+
+(** A type of abstract logic values *)
+type 'a logic
+
+(** A GT-compatible typeinfo for ['a logic] *)
+val logic :
+  (unit, 
+   < show    : ('a -> string) -> 'a logic -> string;    
+     html    : ('a -> HTML.viewer) -> 'a logic -> HTML.viewer;
+     eq      : ('a -> 'a -> bool) -> 'a logic -> 'a logic -> bool;
+     compare : ('a -> 'a -> GT.comparison) -> 'a logic -> 'a logic -> GT.comparison;
+     foldl   : ('syn -> 'a -> 'syn) -> 'syn -> 'a logic -> 'syn;
+     foldr   : ('syn -> 'a -> 'syn) -> 'syn -> 'a logic -> 'syn;
+     gmap    : ('a -> 'sa) -> 'a logic -> 'sa logic 
+   >) GT.t
+
+(** Injecting values into logics *)
+val (!!) : 'a -> 'a logic
+
+(** A synonym for [(!!)] *)
+val inj : 'a -> 'a logic 
+
+(** Exception to raise on a non-value case *)
+exception Not_a_value
+
+exception Not_printable
+
+(** Projecting logics to values (partial, can raise [Not_a_value]) *)
+val (!?) : 'a logic -> 'a
+
+(** A synonym for [(!?)] *)
+val prj : 'a logic -> 'a
+
+(** Projection with failure continuation; [prj_k k l] calls continuation [k],
+    when a free variable is encountered inside [l]; the number of variable is
+    passed to [k] as its argument *)
+val prj_k : (int -> 'a logic list -> 'a) -> 'a logic -> 'a
+
+(** {3 Support for some predefined types (lists, nats, bools etc.)} *)
+
+(** Abstract list type *)
+@type ('a, 'l) llist = Nil | Cons of 'a * 'l with show, html, eq, compare, foldl, foldr, gmap
+
+(** Abstract nat type *)
+@type 'a lnat = O | S of 'a with show, html, eq, compare, foldl, foldr, gmap
+
 (** {3 States and goals} *)
 
 (** A state *)
@@ -69,73 +116,31 @@ module State :
     val show : t -> string
   end
 
-module LogEntry = 
-  struct
+module LogEntry :
+  sig
+    type uresult = Succ | Fail | Violation
+
     type t =
-      `Unification of string * string * string * string option
+    [ `Unification of string * string * uresult
     | `Fresh       of string
-    | `Label       of string
+    | `Label       of string ]
   end
 
 module type Logger = 
   sig
     type t
     
+    val empty : unit -> t
     val log : LogEntry.t -> t -> t
   end
 
-module Make (Log : Logger) = 
+module Make (Log : Logger) :
   sig
 
     type state
 
     (** Goal converts a state into lazy stream of states *)
     type goal = state -> state Stream.t
-
-    (** {3 Logics} *)
-
-    (** A type of abstract logic values *)
-    type 'a logic
-
-    (** A GT-compatible typeinfo for ['a logic] *)
-    val logic :
-      (unit, 
-       < show    : ('a -> string) -> 'a logic -> string;    
-         html    : ('a -> HTML.viewer) -> 'a logic -> HTML.viewer;
-         eq      : ('a -> 'a -> bool) -> 'a logic -> 'a logic -> bool;
-         compare : ('a -> 'a -> GT.comparison) -> 'a logic -> 'a logic -> GT.comparison;
-         foldl   : ('syn -> 'a -> 'syn) -> 'syn -> 'a logic -> 'syn;
-         foldr   : ('syn -> 'a -> 'syn) -> 'syn -> 'a logic -> 'syn;
-         gmap    : ('a -> 'sa) -> 'a logic -> 'sa logic 
-       >) GT.t
-
-    (** Injecting values into logics *)
-    val (!!) : 'a -> 'a logic
-
-    (** A synonym for [(!!)] *)
-    val inj : 'a -> 'a logic 
-
-    (** Exception to raise on a non-value case *)
-    exception Not_a_value
-
-    (** Projecting logics to values (partial, can raise [Not_a_value]) *)
-    val (!?) : 'a logic -> 'a
-
-    (** A synonym for [(!?)] *)
-    val prj : 'a logic -> 'a
-
-    (** Projection with failure continuation; [prj_k k l] calls continuation [k],
-        when a free variable is encountered inside [l]; the number of variable is
-        passed to [k] as its argument *)
-    val prj_k : (int -> 'a logic list -> 'a) -> 'a logic -> 'a
-
-    (** {3 Support for some predefined types (lists, nats, bools etc.)} *)
-
-    (** Abstract list type *)
-    @type ('a, 'l) llist = Nil | Cons of 'a * 'l with show, html, eq, compare, foldl, foldr, gmap
-
-    (** Abstract nat type *)
-    @type 'a lnat = O | S of 'a with show, html, eq, compare, foldl, foldr, gmap
 
     module Bool :
       sig
@@ -397,6 +402,9 @@ module Make (Log : Logger) =
     val nil : 'a List.logic
 
     (** {2 miniKanren basic primitives} *)
+
+    (** [msg <=> s] utility function for logging *)
+    val (<=>) : string -> goal -> goal
 
     (** [call_fresh f] creates a fresh logical variable and passes it to the
         parameter *)
