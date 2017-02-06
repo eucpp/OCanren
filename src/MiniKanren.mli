@@ -120,11 +120,9 @@ module LogEntry :
   sig
     type uresult = Succ | Fail | Violation
 
-    type dstring = (unit -> string)
-
     type t =
-    [ `Unification of dstring * dstring * uresult
-    | `Fresh       of dstring
+    [ `Unification of string * string * uresult
+    | `Fresh       of string
     | `Label       of string ]
   end
 

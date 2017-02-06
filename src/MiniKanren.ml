@@ -83,7 +83,8 @@ module Stream =
 
 let (!!!) = Obj.magic;;
 
-@type 'a logic = Var of GT.int GT.list * GT.int * 'a logic GT.list | Value of 'a with show, html, eq, compare, foldl, foldr, gmap
+@type 'a logic = Var of GT.int GT.list * GT.int * 'a logic GT.list 
+               | Value of 'a * ('a -> string) with show, html, eq, compare, foldl, foldr, gmap
 
 let logic = {logic with 
   gcata = (); 
@@ -107,7 +108,7 @@ let logic = {logic with
 		in
                 Printf.sprintf "_.%d%s" i c
                 
-              method c_Value _ _ x = x.GT.fx ()
+              method c_Value _ _ x f = f x
             end) 
            () 
            x
@@ -130,11 +131,15 @@ exception Not_a_value
 exception Not_printable
 
 let log_logic = function
-| Var (_, i, _) -> fun _ -> Printf.sprintf "_.%d" i
-| Value x       -> fun _ -> raise Not_printable
+| Var (_, i, _) -> Printf.sprintf "_.%d" i
+| Value (x, f)  -> f x
 
-let (!!) x = Value x
-let inj = (!!)
+let (!!) x = Value (x, fun _ -> "???")
+
+let inj ?printer x = 
+  match printer with 
+  | None   -> !! x
+  | Some f -> Value (x, f)
 
 let prj_k k = function Value x -> x | Var (_, i, c) -> k i c
 let prj x = prj_k (fun _ -> raise Not_a_value) x
@@ -322,11 +327,9 @@ module LogEntry =
   struct
     type uresult = Succ | Fail | Violation
 
-    type dstring = (unit -> string)
-
     type t =
-    [ `Unification of dstring * dstring * uresult
-    | `Fresh       of dstring
+    [ `Unification of string * string * uresult
+    | `Fresh       of string
     | `Label       of string ]
   end
 
