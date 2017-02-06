@@ -116,6 +116,11 @@ let logic = {logic with
 
 @type 'a unlogic = [`Var of GT.int * 'a logic GT.list | `Value of 'a] with show, html, eq, compare, foldl, foldr (*, gmap*)
 
+@type ('a, 'l) llist = Nil | Cons of 'a * 'l with show, html, eq, compare, foldl, foldr, gmap
+
+@type 'a lnat = O | S of 'a with show, html, eq, compare, foldl, foldr, gmap
+
+
 let destruct = function
 | Var (_, i, c) -> `Var (i, c)
 | Value x       -> `Value x
@@ -124,9 +129,9 @@ exception Not_a_value
 
 exception Not_printable
 
-let show_logic = function
-| Var (_, i, _) -> Printf.sprintf "_.%d" i
-| Value x -> raise Not_printable
+let log_logic = function
+| Var (_, i, _) -> fun _ -> Printf.sprintf "_.%d" i
+| Value x       -> fun _ -> raise Not_printable
 
 let (!!) x = Value x
 let inj = (!!)
@@ -317,9 +322,11 @@ module LogEntry =
   struct
     type uresult = Succ | Fail | Violation
 
+    type dstring = (unit -> string)
+
     type t =
-    [ `Unification of string * string * uresult
-    | `Fresh       of string
+    [ `Unification of dstring * dstring * uresult
+    | `Fresh       of dstring
     | `Label       of string ]
   end
 
@@ -331,6 +338,15 @@ module type Logger =
     val log : LogEntry.t -> t -> t
   end
 
+module EmptyLogger = 
+  struct
+    type t = unit
+
+    let empty _ = ()
+
+    let log _ _ = ()                 
+  end
+
 module Make (Log : Logger) = 
   struct
     
@@ -338,15 +354,15 @@ module Make (Log : Logger) =
 
     type goal = state -> state Stream.t
 
-    let (<=>) msg f (st, log) = 
+    let (<=>) msg f = 
       let entry = `Label msg in
-      fun state -> f @@
+      fun (st, log) -> f @@
         let log' = Log.log entry log in
         (st, log')
 
     let call_fresh f ((env, subst, constr), log)  =
       let x, env' = Env.fresh env in
-      let entry = `Fresh (show_logic x) in
+      let entry = `Fresh (log_logic x) in
       let log' = Log.log entry log in
       f x ((env', subst, constr), log')
 
@@ -356,7 +372,7 @@ module Make (Log : Logger) =
       try
         let prefix, subst' = Subst.unify env x y (Some subst) in
         let make_log = fun res -> 
-          let entry = `Unification (show_logic x, show_logic y, res) in
+          let entry = `Unification (log_logic x, log_logic y, res) in
           Log.log entry log
         in
         begin match subst' with
@@ -474,9 +490,6 @@ module Make (Log : Logger) =
         (x =/= y) &&& (t === !!true);
         (x === y) &&& (t === !!false);
       ];;
-
-    @type ('a, 'l) llist = Nil | Cons of 'a * 'l with show, html, eq, compare, foldl, foldr, gmap
-    @type 'a lnat = O | S of 'a with show, html, eq, compare, foldl, foldr, gmap
 
     module Bool =
       struct
@@ -866,7 +879,7 @@ module Make (Log : Logger) =
       | Nil -> []
       | Cons (x, xs) -> prj_nat x :: prj_nat_list xs
 
-    let rec refine : state -> 'a logic -> 'a logic = fun ((e, s, c) as st, log) x ->  
+    let rec refine : State.t -> 'a logic -> 'a logic = fun ((e, s, c) as st) x ->  
       let rec walk' recursive env var subst =
         let var = Subst.walk env var subst in
         match Env.var env var with
@@ -940,7 +953,7 @@ module Make (Log : Logger) =
     type 'a refiner = state Stream.t -> 'a logic Stream.t
 
     let refiner : 'a logic -> 'a refiner = fun x ans ->
-      Stream.map (fun st -> refine st x) ans
+      Stream.map (fun (st, log) -> refine st x) ans
 
     module LogicAdder = 
       struct
@@ -968,7 +981,9 @@ module Make (Log : Logger) =
     let pqrst = five
 
     let run n goalish f =
-      let adder, currier, app_num = n () 
+      let adder, currier, app_num = n () in
       let run f = f (State.empty (), Log.empty ()) in
       run (adder goalish) |> ApplyLatest.apply app_num |> (currier f)
   end
+
+include Make(EmptyLogger)

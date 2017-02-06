@@ -120,9 +120,11 @@ module LogEntry :
   sig
     type uresult = Succ | Fail | Violation
 
+    type dstring = (unit -> string)
+
     type t =
-    [ `Unification of string * string * uresult
-    | `Fresh       of string
+    [ `Unification of dstring * dstring * uresult
+    | `Fresh       of dstring
     | `Label       of string ]
   end
 
@@ -134,7 +136,9 @@ module type Logger =
     val log : LogEntry.t -> t -> t
   end
 
-module Make (Log : Logger) :
+module EmptyLogger : Logger
+
+module Make (Log : Logger) : 
   sig
 
     type state
@@ -575,3 +579,5 @@ module Make (Log : Logger) :
       (('n -> ('n -> 'o) * (('n -> 'p) * (('n -> 'q) * (('n -> 'r) * ('n -> 's)))) -> 'o * ('p * ('q * ('r * 's)))) * ('t * ('u * ('v * ('w * ('x * 'y)))) -> ('t * ('u * ('v * ('w * 'x)))) * 'y))
   
   end
+
+include (module type of Make(EmptyLogger))
