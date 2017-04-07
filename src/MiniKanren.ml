@@ -308,6 +308,7 @@ module Subst :
     val show    : t -> string
 
     val normalize : Env.t -> t -> t
+    val equal : Env.t -> t -> t -> bool
   end =
   struct
     module M = Map.Make (Int)
@@ -338,6 +339,27 @@ module Subst :
       | Some i ->
           try walk env (new_val @@ M.find i subst) subst
           with Not_found -> var
+
+    let rec walk' env var subst =
+      let var = walk env var subst in
+      match Env.var env var with
+      | None ->
+          (match wrap (Obj.repr var) with
+           | Unboxed _ -> !!!var
+           | Boxed (t, s, f) ->
+              let var = Obj.dup (Obj.repr var) in
+              let sf =
+                if t = Obj.double_array_tag
+                then !!! Obj.set_double_field
+                else Obj.set_field
+              in
+              for i = 0 to s - 1 do
+                sf var i (!!!(walk' true env (!!!(f i)) subst))
+             done;
+             !!!var
+           | Invalid n -> invalid_arg (sprintf "Invalid value for reconstruction (%d)" n)
+          )
+      | Some i -> var
 
     let rec occurs env xi term subst =
       let y = walk env term subst in
@@ -397,15 +419,32 @@ module Subst :
       unify x y ([], subst)
 
       let normalize env subst =
-        let reify x =
-          match Env.var env x with
-          | Some i -> walk env i subst
-          | None   ->
-            (match wrap (Obj.repr x) with
-            | Unboxed vx -> x
-            | Boxed (tx, sx, fx) -> (** TODO *) )
+        M.mapi (fun i ({new_val=v; _} as cnt) -> {cnt with new_val = walk' env v subst}) subst
+
+      let equal env s1 s2 =
+        let cmp_value {new_val=x; _} {new_val=y; _} =
+        match Env.var env x, Env.var env y with
+        | Some xi, Some yi -> xi = yi
+        | Some xi, _       -> false
+        | _      , Some yi -> false
+        | _ ->
+            let wx, wy = wrap (Obj.repr x), wrap (Obj.repr y) in
+            (match wx, wy with
+             | Unboxed vx, Unboxed vy -> vx = vy
+             | Boxed (tx, sx, fx), Boxed (ty, sy, fy) ->
+             let rec inner i =
+               if i < sx
+               then (cmp_value (fx i) (fy i)) && inner (i+1)
+               else (i = sx) && (i = sy)
+             in
+             (tx = ty) && (sx = sy) && (inner 0)
+             | Invalid n, _
+             | _, Invalid n -> invalid_arg (sprintf "Invalid values for unification (%d)" n)
+             | _ -> false
+            )
         in
-        M.mapi (fun i ({new_val=v; _} as cnt) -> {cnt with new_val = walk env v subst}) subst
+        M.equal cmp_value (normalize env s1) (normalize env s2)
+
   end
 
 module State =
@@ -531,6 +570,15 @@ module Fresh =
 
 let success st = Stream.cons st Stream.nil
 let failure _  = Stream.nil;;
+
+let memo_check tbl ((env, subst, constr) as st) =
+  let subst' = Subst.normalize env subst in
+  try
+    let cnt = Hastbl.find tbl subst' in
+    cnt := !cnt + 1
+  with
+    | Not_found -> Hashtbl.add tbl subst (!0);
+  Stream.Cons (st, Stream.Nil)
 
 exception FreeVarFound
 let has_free_vars is_var x =
