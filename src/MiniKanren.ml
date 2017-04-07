@@ -306,6 +306,8 @@ module Subst :
     val walk    : Env.t -> 'a -> t -> 'a
     val unify   : Env.t -> 'a -> 'a -> t option -> (int * content) list * t option
     val show    : t -> string
+
+    val normalize : Env.t -> t -> t
   end =
   struct
     module M = Map.Make (Int)
@@ -394,6 +396,16 @@ module Subst :
       in
       unify x y ([], subst)
 
+      let normalize env subst =
+        let reify x =
+          match Env.var env x with
+          | Some i -> walk env i subst
+          | None   ->
+            (match wrap (Obj.repr x) with
+            | Unboxed vx -> x
+            | Boxed (tx, sx, fx) -> (** TODO *) )
+        in
+        M.mapi (fun i ({new_val=v; _} as cnt) -> {cnt with new_val = walk env v subst}) subst
   end
 
 module State =
