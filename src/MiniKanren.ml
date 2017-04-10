@@ -75,6 +75,39 @@ let list_filter_map ~f xs =
   in
   helper [] xs
 
+module Cache :
+  sig
+    type t
+    type iter
+
+    val create : unit -> t
+
+    val fold : ('a -> Obj.t -> 'a) -> 'a -> t -> 'a
+    val consume  : t -> iter -> Obj.t * iter
+    val add : t -> Obj.t -> unit
+
+    val start_iter : t -> iter
+    val end_iter   : t -> iter
+    val equal_iter : iter -> iter -> bool
+  end =
+  struct
+    type t = Obj.t list ref
+    type iter = Obj.t list
+
+    let create () = ref []
+
+    let fold f acc cache =
+      List.fold_left f acc !cache
+
+    let consume cache it = (List.hd it, List.tl it)
+
+    let add cache x =
+      cache := List.cons x !cache
+
+    let start_iter cache = !cache
+    let end_iter _ = []
+    let equal_iter = (==)
+  end
 
 (* miniKanren-like streams, the most unsafe implementation *)
 module MKStream =
@@ -86,9 +119,13 @@ module MKStream =
       * closure -- delayed list
       * block with tag 1 -- single value
       * (x,closure)   -- a value and continuation (pair has tag 0)
+      *
     *)
 
     type t = Obj.t
+
+    type suspended =
+      {cache: Cache.t; seen : Cache.iter; thunk: unit -> t}
 
     let nil : t = !!!false
     let is_nil s = (s = !!!false)
@@ -98,7 +135,7 @@ module MKStream =
 
     let from_fun = inc
 
-    type wtf = Dummy of int*string | Single of Obj.t
+    type wtf = Dummy of int*string | Single of Obj.t | Waiting of suspended list
     let () = assert (Obj.tag @@ repr (Single !!![]) = 1)
 
     let single : 'a -> t = fun x ->
@@ -108,64 +145,116 @@ module MKStream =
       assert (closure_tag = tag@@repr f);
       Obj.repr @@ Obj.magic (a,f)
 
-    let case_inf xs ~f1 ~f2 ~f3 ~f4 : Obj.t =
-      if is_int xs then f1 ()
-      else
+    let waiting ss =
+      Obj.repr @@ Obj.magic (Waiting ss)
+
+    let make_waiting cache f =
+      let seen  = Cache.start_iter cache in
+      let thunk = fun () -> f (Cache.start_iter cache) seen in
+      waiting [{cache; seen; thunk}]
+
+    let get_suspended xs =
+      if is_int xs then None
+      else begin
         let tag = Obj.tag (repr xs) in
-        if tag = Obj.closure_tag
-        then f2 (!!!xs: unit -> Obj.t)
-        else if tag = 1 then f3 (field (repr xs) 0)
-        else
-          (* let () = assert (0 = tag) in
-          let () = assert (2 = size (repr xs)) in *)
-          f4 (field (repr xs) 0) (!!!(field (repr xs) 1): unit -> Obj.t)
-      (* [@@inline ] *)
+        if tag = 2
+        then Some (Obj.magic @@ field (repr xs) 0)
+        else None
+      end
 
     let step gs =
       assert (closure_tag = tag @@ repr gs);
       !!!gs ()
 
-    let rec mplus : t -> t -> t  = fun cinf (gs: t) ->
+    let rec unwrap_suspended ss ~on_thunk ~on_waiting =
+      let has_unseen {cache=cache; seen=seen;} =
+        not @@ Cache.equal_iter (Cache.start_iter cache) seen
+      in
+      let rec find_unseen prefix = function
+        | ({thunk=f} as s)::ss ->
+          if has_unseen s
+          then (Some f, (List.rev prefix) @ ss)
+          else find_unseen (s::prefix) ss
+        | [] -> (None, List.rev prefix)
+      in
+      match find_unseen [] ss with
+        | Some f, [] -> on_thunk f
+        | Some f, ss ->
+          let thunk = fun () -> mplus (step f) @@ from_fun (fun () -> waiting ss) in
+          on_thunk thunk
+        | None  , ss -> on_waiting ss
+
+    and case_inf xs ~on_empty ~on_thunk ~on_single ~on_choice ~on_waiting : Obj.t =
+      if is_int xs then on_empty ()
+      else
+        let tag = Obj.tag (repr xs) in
+        if tag = Obj.closure_tag
+        then on_thunk (!!!xs: unit -> Obj.t)
+        else if tag = 1 then on_single (field (repr xs) 0)
+        else if tag = 2 then
+          unwrap_suspended (Obj.magic @@ field (repr xs) 0) ~on_thunk ~on_waiting
+        else
+          (* let () = assert (0 = tag) in
+          let () = assert (2 = size (repr xs)) in *)
+          on_choice (field (repr xs) 0) (!!!(field (repr xs) 1): unit -> Obj.t)
+      (* [@@inline ] *)
+
+    and mplus : t -> t -> t  = fun cinf (gs: t) ->
       assert (closure_tag = tag @@ repr gs);
       case_inf cinf
-        ~f1:(fun () ->
+        ~on_empty:(fun () ->
               step gs)
-        ~f2:(fun f ->
+        ~on_thunk:(fun f ->
               inc begin fun () ->
                 let r = step gs in
                 mplus r !!!f
               end)
-        ~f3:(fun c ->
+        ~on_single:(fun c ->
               choice c gs
           )
-        ~f4:(fun c ff ->
+        ~on_choice:(fun c ff ->
               choice c (inc @@ fun () -> mplus (step gs) !!!ff)
+          )
+        ~on_waiting:(fun ss ->
+              let gs = !!!(step gs) in
+              match get_suspended gs with
+                | Some ss' -> waiting (ss @ ss')
+                | None     -> mplus gs @@ from_fun (fun () -> waiting ss)
           )
 
     let rec bind cinf g =
       case_inf cinf
-        ~f1:(fun () ->
+        ~on_empty:(fun () ->
                 nil)
-        ~f2:(fun f ->
+        ~on_thunk:(fun f ->
               (* delay here because miniKanren has it *)
               inc begin fun () ->
                 let r = f () in
                 bind r g
               end)
-        ~f3:(fun c ->
+        ~on_single:(fun c ->
               (!!!g c) )
-        ~f4:(fun c f ->
+        ~on_choice:(fun c f ->
               let arg1 = !!!g c in
               mplus arg1 @@
                     inc begin fun () ->
                       bind (step f) g
                     end
           )
+        ~on_waiting:(fun ss ->
+            let bind_suspended ({thunk=z;} as s) =
+              {s with thunk = fun () -> bind (step z) g}
+            in
+            waiting @@ List.map bind_suspended ss
+          )
   end
 
 module Stream =
   struct
-    type 'a t = Nil | Cons of 'a * 'a t | Lazy of 'a t Lazy.t
+    type 'a t =
+      | Nil
+      | Cons of 'a * 'a t
+      | Lazy of 'a t Lazy.t
 
     let from_fun (f: unit -> 'a t) : 'a t = Lazy (Lazy.from_fun f)
 
@@ -176,12 +265,13 @@ module Stream =
     let rec of_mkstream : MKStream.t -> 'a t = fun xs ->
       let rec helper xs =
         !!!MKStream.case_inf !!!xs
-          ~f1:(fun () -> !!!Nil)
-          ~f2:(fun f  ->
+          ~on_empty:(fun () -> !!!Nil)
+          ~on_thunk:(fun f  ->
               !!! (from_fun (fun () ->
                 helper @@ f ())) )
-          ~f3:(fun a -> !!!(cons a Nil) )
-          ~f4:(fun a f -> !!!(cons a @@ from_fun (fun () -> helper @@ f ())) )
+          ~on_single:(fun a -> !!!(cons a Nil) )
+          ~on_choice:(fun a f -> !!!(cons a @@ from_fun (fun () -> helper @@ f ())) )
+          ~on_waiting:(fun _ -> Nil)
       in
       !!!(helper !!!xs)
 
@@ -200,21 +290,67 @@ module Stream =
 
     let take ?(n=(-1)) s = fst @@ retrieve ~n s
 
-    let hd s = List.hd @@ take ~n:1 s
-    let tl s = snd @@ retrieve ~n:1 s
-
     (* let rec mplus fs gs =
       match fs with
       | Nil           -> gs
       | Cons (hd, tl) -> cons hd @@ from_fun (fun () -> mplus gs tl)
-      | Lazy z        -> from_fun (fun () -> mplus gs (Lazy.force z) )
+      | Lazy z        -> from_fun (fun () -> mplus gs (Lazy.force z))
+      (* handling waiting streams is tricky *)
+      | Waiting ss    -> (match unwrap_suspended ss, gs with
+        (* if [fs] hasn't unseen cached answers and [gs] is also a waiting stream then we merge them  *)
+        | Waiting ss, Waiting ss' -> Waiting (ss @ ss')
+        (* if [fs] hasn't unseen cached answers but [gs] is not a waiting stream then we swap them,
+           pushing waiting stream to the back of the new stream *)
+        | Waiting ss, _           -> mplus gs @@ Lazy (Lazy.from_fun (fun () -> fs))
+        (* if [fs] has unseen cached answers then [fs'] contains lazy stream ready to produce theese answers *)
+        | fs', _                  -> mplus fs' gs)
+    and unwrap_suspended ss =
+      let has_unseen {cache=cache; seen=seen; _} =
+        not @@ Cache.equal_iter (Cache.start_iter cache) seen
+      in
+      let rec find_unseen prefix = function
+        | ({thunk=f; _} as s)::ss ->
+          if has_unseen s then (Some (Lazy f), (List.rev prefix) @ ss) else find_unseen (s::prefix) ss
+        | [] -> (None, List.rev prefix)
+      in
+      match find_unseen [] ss with
+        | Some s, [] -> s
+        | Some s, ss -> mplus s @@ Waiting ss
+        | None  , ss -> Waiting ss
 
     let rec bind xs f =
       match xs with
       | Cons (x, xs) -> from_fun (fun () -> mplus (f x) (bind xs f))
       | Nil          -> nil
-      | Lazy z       -> from_fun (fun () -> bind (Lazy.force z) f) *)
+      | Lazy z       -> from_fun (fun () -> bind (Lazy.force z) f)
+      | Waiting ss   -> match unwrap_suspended ss with
+        | Waiting ss ->
+          let ss' = map_suspended (fun s -> bind s f) ss in
+          Waiting ss'
+        | xs' -> bind xs' f *)
 
+    (* let rec is_empty = function
+    | Nil         -> true
+    | Lazy s      -> is_empty @@ Lazy.force s
+    | Waiting ss  -> (match unwrap_suspended ss with
+        | Waiting _ -> true
+        | _         -> false
+      )
+    | _           -> false
+
+    let rec retrieve ?(n=(-1)) s =
+      if n = 0
+      then [], s
+      else match s with
+        | Nil          -> [], s
+        | Cons (x, xs) -> let xs', s' = retrieve ~n:(n-1) xs in x::xs', s'
+        | Lazy  z      -> retrieve ~n (Lazy.force z)
+        | Waiting ss   -> (match unwrap_suspended ss with
+          | Waiting ss -> [], s
+          | s'         -> retrieve ~n s') *)
+
+    let hd s = List.hd @@ take ~n:1 s
+    let tl s = snd @@ retrieve ~n:1 s
 
     let rec map f = function
     | Nil          -> Nil
@@ -237,7 +373,6 @@ module Stream =
   end
 ;;
 
-(* ************************************************ *)
 @type 'a logic =
 | Var   of GT.int * 'a logic GT.list
 | Value of 'a with show, gmap, html, eq, compare, foldl, foldr
@@ -288,6 +423,7 @@ let logic = {logic with
 (* Scope there are just ints but in faster-MK they use reference equality *)
 type scope_t = int
 let non_local_scope : scope_t = -6
+let tabling_cache_scope : scope_t = -7
 
 let new_scope : unit -> scope_t =
   let scope = ref 0 in (* TODO: maybe put this into Env.t *)
@@ -493,14 +629,17 @@ let pretty_generic_show ?(maxdepth= 99999) is_var x =
   Buffer.contents b
 ;;
 
+exception External_variable of int
+
 module Env :
   sig
     type t
 
     val empty  : unit -> t
-    val fresh  : ?name:string -> scope:scope_t -> t -> 'a * t
+    val fresh  : ?name:string -> scope:scope_t -> t -> inner_logic
     val var    : t -> 'a -> int option
     val is_var : t -> 'a -> bool
+    val reset    : t -> t
   end =
   struct
     type t =  { token : token_env;
@@ -508,14 +647,19 @@ module Env :
               }
 
     let last_token : token_env ref = ref 11
+
+    let first_var = 10
+
     let empty () =
       incr last_token;
-      { token= !last_token; next=10 }
+      { token = !last_token; next = first_var }
+
+    let reset env = { env with next = first_var }
 
     let fresh ?name ~scope e =
-      let v = !!!(make_inner_logic ~envt:e.token ~scope e.next) in
+      let v = make_inner_logic ~envt:e.token ~scope e.next in
       e.next <- 1+e.next;
-      (!!!v, e)
+      v
 
     let var_tag, var_size =
       let index = 0 in (* dummy index *)
@@ -524,7 +668,7 @@ module Env :
       let v = make_inner_logic ~envt ~scope index in
       Obj.tag (!!! v), Obj.size (!!! v)
 
-    let var env x =
+    let var {token=env_token; next=n} x =
       (* There we detect if x is a logic variable and then that it belongs to current env *)
       let t = !!! x in
       if Obj.tag  t = var_tag  &&
@@ -533,7 +677,7 @@ module Env :
           (Obj.is_block !!!token) && token == (!!!global_token)
          )
       then (let q = (!!!x : inner_logic).token_env in
-            if (Obj.is_int !!!q) && q == (!!!env.token)
+            if (Obj.is_int !!!q) (* && q == (!!!env.token) *)
             then Some (!!!x : inner_logic).index
             else failwith "You hacked everything and pass logic variables into wrong environment"
             )
@@ -571,7 +715,7 @@ module Subst :
     val empty   : t
 
     type content = { lvar: inner_logic; new_val: Obj.t }
-    val make_content : inner_logic -> 'b  -> content
+    val make_content : inner_logic -> 'b -> content
 
     val of_list : content list -> t
 
@@ -587,6 +731,7 @@ module Subst :
     val merge_a_prefix: Env.t -> scope:scope_t -> content list -> t -> (t * bool) option
 
     val unify   : Env.t -> 'a -> 'a -> scope:scope_t -> t -> (content list * t) option
+
     val show    : t -> string
     val pretty_show : ('a -> bool) -> t -> string
   end = struct
@@ -642,36 +787,6 @@ module Subst :
       in
       helper term
 
-    (* let walk_by_func env var lookupf =
-      let rec helper var =
-        match Env.var env !!!var with
-        | None -> var
-        | Some i ->
-            try let ans = (lookupf i !!!var) in
-                if ans != !!!var then helper ans else var
-            with Not_found -> var
-      in
-      helper var
-
-    let occurs_by_func env xi term lookupf =
-      let rec helper term =
-        let y = walk_by_func env term lookupf in
-        match Env.var env y with
-        | Some yi -> xi = yi
-        | None ->
-           match wrap (Obj.repr y) with
-           | Invalid n when n = Obj.closure_tag -> false
-           | Unboxed _ -> false
-           | Invalid n -> invalid_arg (sprintf "Invalid value in occurs check (%d)" n)
-           | Boxed (_, s, f) ->
-              let rec inner i =
-                if i >= s then false
-                else helper (!!!(f i)) || inner (i+1)
-              in
-              inner 0
-      in
-      helper term *)
-
     let rec occurs env xi term subst =
       let y = walk env term subst in
       match Env.var env y with
@@ -706,7 +821,6 @@ module Subst :
           * if we do unification after the fresh, then if case of failure unification it doesn't matter
             that variable will be distructively substituted: we will not look on these variables in future.
         *)
-
       let extend xi x term (prefix,sub1) =
         if occurs env xi term sub1 then raise Occurs_check
         else
@@ -769,15 +883,14 @@ let rec refine : Env.t -> Subst.t -> _ -> Obj.t -> Obj.t = fun env subst do_dise
     | None ->
         (match wrap (Obj.repr var) with
           | Unboxed _ -> Obj.repr var
-          | Boxed (t, s, f) ->
+          | Boxed (tag, sz, f) ->
             let copy = Obj.dup (Obj.repr var) in (* not a shallow copy *)
             let sf =
-              if t = Obj.double_array_tag
+              if tag = Obj.double_array_tag
               then !!! Obj.set_double_field
               else Obj.set_field
             in
-
-            for i = 0 to s-1 do
+            for i = 0 to sz-1 do
               sf copy i @@ walk' forbidden (!!!(f i))
             done;
             copy
@@ -792,6 +905,45 @@ let rec refine : Env.t -> Subst.t -> _ -> Obj.t -> Obj.t = fun env subst do_dise
           Obj.repr {!!!var with constraints = cs}
   in
   walk' [] x
+
+let rec refresh : Env.t -> Subst.t -> Obj.t -> Obj.t = fun env subst x ->
+  let tbl = Hashtbl.create 31 in
+  let rec walk' term =
+    let var = Subst.walk env term subst in
+      (match Env.var env var with
+      | None ->
+          (match wrap (Obj.repr var) with
+            | Unboxed _ -> Obj.repr var
+            | Boxed (tag, sz, f) ->
+              let copy = Obj.dup (Obj.repr var) in (* not a shallow copy *)
+              let sf =
+                if tag = Obj.double_array_tag
+                then !!! Obj.set_double_field
+                else Obj.set_field
+              in
+              let rec walk_obj i =
+                if i < sz then
+                  let new_field = walk' (!!!(f i)) in
+                  sf copy i new_field;
+                  walk_obj (i+1)
+                else
+                  ()
+              in
+              let subst' = walk_obj 0 in
+              copy
+            | Invalid n -> invalid_arg (sprintf "Invalid value for refreshing (%d)" n)
+          )
+      | Some _ -> begin
+        try
+          Hashtbl.find tbl var
+        with Not_found ->
+          let fresh_var = Env.fresh env ~scope:tabling_cache_scope in
+          Hashtbl.add tbl var !!!fresh_var;
+          Obj.repr fresh_var
+        end
+    )
+  in
+  walk' x
 
 exception Disequality_violated
 
@@ -1059,6 +1211,7 @@ struct
     let prefix = List.split @@ List.map (fun {lvar;new_val} -> (lvar, new_val)) prefix in
     (* There we can save on memory allocations if we will
        do incremental unification of the list *)
+
     let subsumes subst (vs, ts) =
       try
         match Subst.unify env !!!vs !!!ts non_local_scope (Some subst) with
@@ -1076,6 +1229,44 @@ struct
              else c :: traverse cs
     in
     traverse constr
+
+  let extend ~prefix env cs : t = normalize_store ~prefix env cs
+
+  let refine_in_subst = refine
+
+  let refine_everywhere env x sub1 sub2 =
+    (* we make a long walk in two substitutions *)
+    let rec helper prev_is_ok cur_sub prev_sub term =
+      let dest = refine_in_subst env cur_sub term in
+      match (dest = term), prev_is_ok with
+      | true, true  -> dest
+      | true, false -> helper true  prev_sub cur_sub term
+      | false, _    -> helper false prev_sub cur_sub dest
+    in
+    helper false sub1 sub2 x
+
+  let refine env base_subs c term =
+    ListLabels.fold_left ~init:[] ~f:(fun acc csubst ->
+        let dest = refine_everywhere env term base_subs csubst in
+        if dest == term then acc
+        else dest :: acc
+      ) c
+
+  let check ~prefix env subst' cstr =
+    ListLabels.fold_left cstr ~init:[] ~f:(fun css' cs_sub ->
+      let x,t = Subst.split cs_sub in
+      try
+        let p, s' = Subst.unify env (!!!x) (!!!t) subst' in
+        match s' with
+        | None -> css'
+        | Some _ ->
+            match p with
+            | [] -> raise Disequality_violated
+            | _  -> (Subst.of_list p)::css'
+      with Occurs_check -> css'
+    )
+
+  let show c = GT.show(GT.list) Subst.show c
 
   let extend ~prefix env cs : t = normalize_store ~prefix env cs
 
@@ -1117,9 +1308,9 @@ module State =
     let show  (env, subst, constr, scp) =
       sprintf "st {%s, %s} scope=%d" (Subst.show subst) (Constraints.show ~env constr) scp
     let new_var (e,_,_,scope) =
-      let (x,_) = Env.fresh ~scope e in
-      let i = (!!!x : inner_logic).index in
-      (x,i)
+      let x = Env.fresh ~scope e in
+      let i = x.index in
+      (!!!x,i)
     let incr_scope (e,subs,cs,scp) = (e,subs,cs, new_scope ())
   end
 
@@ -1127,8 +1318,8 @@ type 'a goal' = State.t -> 'a
 type goal = MKStream.t goal'
 
 let call_fresh f : State.t -> _ = fun (env, subst, constr, scope) ->
-  let x, env' = Env.fresh ~scope env in
-  f x (env', subst, constr, scope)
+  let x = Env.fresh ~scope env in
+  f !!!x (env, subst, constr, scope)
 
 let unif_counter = ref 0
 let logged_unif_counter = ref 0
@@ -1272,7 +1463,6 @@ let make_rr : ('a, 'b) injected -> State.t -> ('a, 'b) refined = fun x ((env, s,
   let ans = !!!(refine env s (Constraints.refine env s cs) (Obj.repr x)) in
   let is_open = has_free_vars (Env.is_var env) (Obj.repr ans) in
   let c: helper = helper_of_state st in
-
   object(self)
     method is_open = is_open
     method prj = if self#is_open then raise Not_a_value else !!!ans
@@ -1356,7 +1546,78 @@ let run n goalish f =
   let run f = f (State.empty ()) in
   run (adder goalish) |> ApplyLatest.apply app_num |> (currier f)
 
-(* Tracing/debugging stuff *)
+
+(** ************************************************************************* *)
+(** Tabling primitives                                                        *)
+
+let slave_call argv cache ((env, subst, constr, scope) as st) =
+  let rec consume it seen =
+    if Cache.equal_iter it seen then
+      MKStream.make_waiting cache consume
+    else
+      let x, it' = Cache.consume cache it in
+      let answ = refresh env subst x in
+      (* printf "consume from cache %s\n" (generic_show answ); *)
+      match Subst.unify env argv answ subst ~scope:non_local_scope with
+        | Some (_, s) -> MKStream.choice (env, s, constr, tabling_cache_scope) (MKStream.from_fun @@ fun () -> consume it' seen)
+        | None      -> failwith "Cannot unify cached term with argument term"
+  in
+  consume (Cache.start_iter cache) (Cache.end_iter cache)
+
+let tabling_hook argv cache ((env, subst, constr) as st) =
+  (* let empty_env = Env.empty () in *)
+  (* refine argv in current subst *)
+  let argv' = refine env subst (fun _ -> []) argv in
+  (* rename all variables to 0 ... n *)
+  let argv'' = refresh (Env.empty ()) Subst.empty argv' in
+  let alpha_eq answ =
+    (* all variables in both terms are renamed to 0 ... n, *)
+    (* because of that simple equivalence test is enough *)
+    let answ'' = refresh (Env.empty ()) Subst.empty answ in
+    (* printf "alpha-eq? \n    %s\n    %s\n" (generic_show argv'') (generic_show answ''); *)
+    argv'' = answ''
+  in
+  (* let _ = printf "tabling_hook %s\n" (generic_show argv') in *)
+  let is_cached = Cache.fold (fun acc answ -> acc || alpha_eq answ) false cache in
+  (* printf "is_cached? %d\n" (if is_cached then 1 else 0); *)
+  if not is_cached then begin
+    Cache.add cache (refine env subst (fun _ -> []) argv');
+    success st
+  end
+  else
+    failure ()
+
+type table = Env.t * ((Obj.t, Cache.t) Hashtbl.t)
+
+let make_table () = (Env.empty (), Hashtbl.create 1031)
+
+let tabled (empty_env, tbl) goal args_list ((env, subst, constr, _) as st) =
+  let argv = refine env subst (fun _ -> []) args_list in
+  let key  = refresh (Env.reset empty_env) Subst.empty argv in
+  try
+    let cache = Hashtbl.find tbl key in
+    (* printf "slave call %s\n" (generic_show key); *)
+    slave_call argv cache st
+  with Not_found ->
+    let cache = Cache.create () in
+    (* printf "master call %s\n" (generic_show key); *)
+    Hashtbl.add tbl key cache;
+    ((goal ()) &&& (tabling_hook argv cache)) st
+
+let tabled1 tbl goal q =
+  tabled tbl (fun () -> goal q) @@ Obj.repr [Obj.repr q;]
+
+let tabled2 tbl goal q r =
+  tabled tbl (fun () -> goal q r) @@ Obj.repr [Obj.repr q; Obj.repr r]
+
+let tabled3 tbl goal q r s =
+  tabled tbl (fun () -> goal q r s) @@ Obj.repr [Obj.repr q; Obj.repr r; Obj.repr s]
+
+let tabled4 tbl goal q r s t =
+  tabled tbl (fun () -> goal q r s t) @@ Obj.repr [Obj.repr q; Obj.repr r; Obj.repr s; Obj.repr t]
+
+let tabled5 tbl goal p q r s t =
+  tabled tbl (fun () -> goal p q r s t) @@ Obj.repr [Obj.repr p; Obj.repr q; Obj.repr r; Obj.repr s; Obj.repr t]
 
 let trace msg g = fun state ->
   printf "%s: %s\n%!" msg (State.show state);
@@ -1400,7 +1661,5 @@ let diseqtrace shower x y = fun st ->
   if MKStream.is_nil ans then printfn "  -"
   else  printfn "  +"; *)
   ans;;
-
-(* ***************************** a la relational StdLib here ***************  *)
 
 let report_counters () = ()
