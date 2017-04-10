@@ -306,6 +306,53 @@ val run : ?listener:Listener.t ->
 *)
 val delay  : (unit -> goal) -> goal
 
+type table
+
+val make_table : unit -> table
+
+val tabled1 : table -> ('a -> goal) -> 'a -> goal
+val tabled2 : table -> ('a -> 'b -> goal) -> 'a -> 'b -> goal
+val tabled3 : table -> ('a -> 'b -> 'c -> goal) -> 'a -> 'b -> 'c -> goal
+val tabled4 : table -> ('a -> 'b -> 'c -> 'd -> goal) -> 'a -> 'b -> 'c -> 'd -> goal
+val tabled5 : table -> ('a -> 'b -> 'c -> 'd -> 'e -> goal) -> 'a -> 'b -> 'c -> 'd -> 'e -> goal
+
+(** Reification helper *)
+type helper
+
+val project1: msg:string -> (helper -> ('a, 'b) injected -> string) -> ('a, 'b) injected -> goal
+val project2: msg:string -> (helper -> ('a, 'b) injected -> string) -> ('a, 'b) injected -> ('a, 'b) injected -> goal
+val project3: msg:string -> (helper -> ('a, 'b) injected -> string) ->
+    ('a, 'b) injected -> ('a, 'b) injected -> ('a, 'b) injected -> goal
+
+(* Like (===) but with tracing *)
+val unitrace: ?loc:string -> (helper -> ('a, 'b) injected -> string) -> ('a, 'b) injected -> ('a, 'b) injected -> goal
+
+val diseqtrace: (helper -> ('a, 'b) injected -> string) -> ('a, 'b) injected -> ('a, 'b) injected -> goal
+
+(**
+  The exception is raised when we try to extract plain term from the answer but only terms with free
+  variables are possible.
+*)
+exception Not_a_value
+
+(** Reification result *)
+class type ['a,'b] refined = object
+  (** Returns [true] if the term has any free logic variable inside *)
+  method is_open: bool
+
+  (**
+    Get the answer as plain term. Raises exception [Not_a_value] when only terms with free variables
+    are available.
+  *)
+  method prj: 'a
+
+  (**
+    Get the answer as non-flat value. If the actual answer is a flat value it will be injected using
+    the function provided.
+   *)
+  method refine: (helper -> ('a, 'b) injected -> 'b) -> inj:('a -> 'b) -> 'b
+end
+
 (** A type to refine a stream of states into the stream of answers (w.r.t. some known logic variable *)
 type ('a, 'b) refiner
 

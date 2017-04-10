@@ -1,0 +1,17 @@
+fun q -> patho ((!!) "a") q, 10 answers {
+q=b;
+q=a;
+q=d;
+q=b;
+q=a;
+q=d;
+q=b;
+q=a;
+q=d;
+q=b;
+}
+fun q -> tabled2 tbl pathot ((!!) "a") q, 10 answers {
+q=b;
+q=a;
+q=d;
+}

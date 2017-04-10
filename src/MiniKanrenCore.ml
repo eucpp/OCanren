@@ -75,6 +75,39 @@ let list_filter_map ~f xs =
   in
   helper [] xs
 
+module Cache :
+  sig
+    type t
+    type iter
+
+    val create : unit -> t
+
+    val fold : ('a -> Obj.t -> 'a) -> 'a -> t -> 'a
+    val consume  : t -> iter -> Obj.t * iter
+    val add : t -> Obj.t -> unit
+
+    val start_iter : t -> iter
+    val end_iter   : t -> iter
+    val equal_iter : iter -> iter -> bool
+  end =
+  struct
+    type t = Obj.t list ref
+    type iter = Obj.t list
+
+    let create () = ref []
+
+    let fold f acc cache =
+      List.fold_left f acc !cache
+
+    let consume cache it = (List.hd it, List.tl it)
+
+    let add cache x =
+      cache := List.cons x !cache
+
+    let start_iter cache = !cache
+    let end_iter _ = []
+    let equal_iter = (==)
+  end
 
 (* miniKanren-like streams, the most unsafe implementation *)
 module MKStream =
@@ -86,9 +119,13 @@ module MKStream =
       * closure -- delayed list
       * block with tag 1 -- single value
       * (x,closure)   -- a value and continuation (pair has tag 0)
+      *
     *)
 
     type t = Obj.t
+
+    type suspended =
+      {cache: Cache.t; seen : Cache.iter; thunk: unit -> t}
 
     let nil : t = !!!false
     let is_nil s = (s = !!!false)
@@ -98,7 +135,7 @@ module MKStream =
 
     let from_fun = inc
 
-    type wtf = Dummy of int*string | Single of Obj.t
+    type wtf = Dummy of int*string | Single of Obj.t | Waiting of suspended list
     let () = assert (Obj.tag @@ repr (Single !!![]) = 1)
 
     let single : 'a -> t = fun x ->
@@ -108,58 +145,107 @@ module MKStream =
       assert (closure_tag = tag@@repr f);
       Obj.repr @@ Obj.magic (a,f)
 
-    let case_inf xs ~f1 ~f2 ~f3 ~f4 : Obj.t =
-      if is_int xs then f1 ()
-      else
+    let waiting ss =
+      Obj.repr @@ Obj.magic (Waiting ss)
+
+    let make_waiting cache f =
+      let seen  = Cache.start_iter cache in
+      let thunk = fun () -> f (Cache.start_iter cache) seen in
+      waiting [{cache; seen; thunk}]
+
+    let get_suspended xs =
+      if is_int xs then None
+      else begin
         let tag = Obj.tag (repr xs) in
-        if tag = Obj.closure_tag
-        then f2 (!!!xs: unit -> Obj.t)
-        else if tag = 1 then f3 (field (repr xs) 0)
-        else
-          (* let () = assert (0 = tag) in
-          let () = assert (2 = size (repr xs)) in *)
-          f4 (field (repr xs) 0) (!!!(field (repr xs) 1): unit -> Obj.t)
-      (* [@@inline ] *)
+        if tag = 2
+        then Some (Obj.magic @@ field (repr xs) 0)
+        else None
+      end
 
     let step gs =
       assert (closure_tag = tag @@ repr gs);
       !!!gs ()
 
-    let rec mplus : t -> t -> t  = fun cinf (gs: t) ->
+    let rec unwrap_suspended ss ~on_thunk ~on_waiting =
+      let has_unseen {cache=cache; seen=seen;} =
+        not @@ Cache.equal_iter (Cache.start_iter cache) seen
+      in
+      let rec find_unseen prefix = function
+        | ({thunk=f} as s)::ss ->
+          if has_unseen s
+          then (Some f, (List.rev prefix) @ ss)
+          else find_unseen (s::prefix) ss
+        | [] -> (None, List.rev prefix)
+      in
+      match find_unseen [] ss with
+        | Some f, [] -> on_thunk f
+        | Some f, ss ->
+          let thunk = fun () -> mplus (step f) @@ from_fun (fun () -> waiting ss) in
+          on_thunk thunk
+        | None  , ss -> on_waiting ss
+
+    and case_inf xs ~on_empty ~on_thunk ~on_single ~on_choice ~on_waiting : Obj.t =
+      if is_int xs then on_empty ()
+      else
+        let tag = Obj.tag (repr xs) in
+        if tag = Obj.closure_tag
+        then on_thunk (!!!xs: unit -> Obj.t)
+        else if tag = 1 then on_single (field (repr xs) 0)
+        else if tag = 2 then
+          unwrap_suspended (Obj.magic @@ field (repr xs) 0) ~on_thunk ~on_waiting
+        else
+          (* let () = assert (0 = tag) in
+          let () = assert (2 = size (repr xs)) in *)
+          on_choice (field (repr xs) 0) (!!!(field (repr xs) 1): unit -> Obj.t)
+      (* [@@inline ] *)
+
+    and mplus : t -> t -> t  = fun cinf (gs: t) ->
       assert (closure_tag = tag @@ repr gs);
       case_inf cinf
-        ~f1:(fun () ->
+        ~on_empty:(fun () ->
               step gs)
-        ~f2:(fun f ->
+        ~on_thunk:(fun f ->
               inc begin fun () ->
                 let r = step gs in
                 mplus r !!!f
               end)
-        ~f3:(fun c ->
+        ~on_single:(fun c ->
               choice c gs
           )
-        ~f4:(fun c ff ->
+        ~on_choice:(fun c ff ->
               choice c (inc @@ fun () -> mplus (step gs) !!!ff)
+          )
+        ~on_waiting:(fun ss ->
+              let gs = !!!(step gs) in
+              match get_suspended gs with
+                | Some ss' -> waiting (ss @ ss')
+                | None     -> mplus gs @@ from_fun (fun () -> waiting ss)
           )
 
     let rec bind cinf g =
       case_inf cinf
-        ~f1:(fun () ->
+        ~on_empty:(fun () ->
                 nil)
-        ~f2:(fun f ->
+        ~on_thunk:(fun f ->
               (* delay here because miniKanren has it *)
               inc begin fun () ->
                 let r = f () in
                 bind r g
               end)
-        ~f3:(fun c ->
+        ~on_single:(fun c ->
               (!!!g c) )
-        ~f4:(fun c f ->
+        ~on_choice:(fun c f ->
               let arg1 = !!!g c in
               mplus arg1 @@
                     inc begin fun () ->
                       bind (step f) g
                     end
+          )
+        ~on_waiting:(fun ss ->
+            let bind_suspended ({thunk=z;} as s) =
+              {s with thunk = fun () -> bind (step z) g}
+            in
+            waiting @@ List.map bind_suspended ss
           )
   end
 
@@ -176,12 +262,13 @@ module Stream =
     let rec of_mkstream : MKStream.t -> 'a t = fun xs ->
       let rec helper xs =
         !!!MKStream.case_inf !!!xs
-          ~f1:(fun () -> !!!Nil)
-          ~f2:(fun f  ->
+          ~on_empty:(fun () -> !!!Nil)
+          ~on_thunk:(fun f  ->
               !!! (from_fun (fun () ->
                 helper @@ f ())) )
-          ~f3:(fun a -> !!!(cons a Nil) )
-          ~f4:(fun a f -> !!!(cons a @@ from_fun (fun () -> helper @@ f ())) )
+          ~on_single:(fun a -> !!!(cons a Nil) )
+          ~on_choice:(fun a f -> !!!(cons a @@ from_fun (fun () -> helper @@ f ())) )
+          ~on_waiting:(fun _ -> Nil)
       in
       !!!(helper !!!xs)
 
@@ -288,6 +375,7 @@ let logic = {logic with
 (* Scope there are just ints but in faster-MK they use reference equality *)
 type scope_t = int
 let non_local_scope : scope_t = -6
+let tabling_cache_scope : scope_t = -7
 
 let new_scope : unit -> scope_t =
   let scope = ref 0 in (* TODO: maybe put this into Env.t *)
@@ -496,6 +584,7 @@ module Env :
     val fresh  : ?name:string -> scope:scope_t -> t -> 'a * t
     val var    : t -> 'a -> int option
     val is_var : t -> 'a -> bool
+    val reset  : t -> t
   end =
   struct
     type t =  { token : token_env;
@@ -503,9 +592,14 @@ module Env :
               }
 
     let last_token : token_env ref = ref 11
+
+    let first_var = 10
+
     let empty () =
       incr last_token;
-      { token= !last_token; next=10 }
+      { token = !last_token; next = first_var }
+
+    let reset env = { env with next = first_var }
 
     let fresh ?name ~scope e =
       let v = !!!(make_inner_logic ~envt:e.token ~scope e.next) in
@@ -528,7 +622,7 @@ module Env :
           (Obj.is_block !!!token) && token == (!!!global_token)
          )
       then (let q = (!!!x : inner_logic).token_env in
-            if (Obj.is_int !!!q) && q == (!!!env.token)
+            if (Obj.is_int !!!q) (*&& q == (!!!env.token)*)
             then Some (!!!x : inner_logic).index
             else failwith "You hacked everything and pass logic variables into wrong environment"
             )
@@ -787,6 +881,45 @@ let rec refine : Env.t -> Subst.t -> _ -> Obj.t -> Obj.t = fun env subst do_dise
           Obj.repr {!!!var with constraints = cs}
   in
   walk' [] x
+
+let rec refresh : Env.t -> Subst.t -> Obj.t -> Obj.t = fun env subst x ->
+  let tbl = Hashtbl.create 31 in
+  let rec walk' term =
+    let var = Subst.walk env term subst in
+      (match Env.var env var with
+      | None ->
+          (match wrap (Obj.repr var) with
+            | Unboxed _ -> Obj.repr var
+            | Boxed (tag, sz, f) ->
+              let copy = Obj.dup (Obj.repr var) in (* not a shallow copy *)
+              let sf =
+                if tag = Obj.double_array_tag
+                then !!! Obj.set_double_field
+                else Obj.set_field
+              in
+              let rec walk_obj i =
+                if i < sz then
+                  let new_field = walk' (!!!(f i)) in
+                  sf copy i new_field;
+                  walk_obj (i+1)
+                else
+                  ()
+              in
+              let subst' = walk_obj 0 in
+              copy
+            | Invalid n -> invalid_arg (sprintf "Invalid value for refreshing (%d)" n)
+          )
+      | Some _ -> begin
+        try
+          Hashtbl.find tbl var
+        with Not_found ->
+          let fresh_var = Env.fresh env ~scope:tabling_cache_scope in
+          Hashtbl.add tbl var !!!fresh_var;
+          Obj.repr fresh_var
+        end
+    )
+  in
+  walk' x
 
 exception Disequality_violated
 
@@ -1431,6 +1564,78 @@ module Trace =
     let diseq ?p x y = Listener.Diseq (print_pair ?p x y)
 
   end
+
+(** ************************************************************************* *)
+(** Tabling primitives                                                        *)
+
+let slave_call argv cache ((env, subst, constr, scope) as st) =
+  let rec consume it seen =
+    if Cache.equal_iter it seen then
+      MKStream.make_waiting cache consume
+    else
+      let x, it' = Cache.consume cache it in
+      let answ = refresh env subst x in
+      (* printf "consume from cache %s\n" (generic_show answ); *)
+      match Subst.unify env argv answ subst ~scope:non_local_scope with
+        | Some (_, s) -> MKStream.choice (env, s, constr, tabling_cache_scope) (MKStream.from_fun @@ fun () -> consume it' seen)
+        | None      -> failwith "Cannot unify cached term with argument term"
+  in
+  consume (Cache.start_iter cache) (Cache.end_iter cache)
+
+let tabling_hook argv cache ((env, subst, constr) as st) =
+  (* let empty_env = Env.empty () in *)
+  (* refine argv in current subst *)
+  let argv' = refine env subst (fun _ -> []) argv in
+  (* rename all variables to 0 ... n *)
+  let argv'' = refresh (Env.empty ()) Subst.empty argv' in
+  let alpha_eq answ =
+    (* all variables in both terms are renamed to 0 ... n, *)
+    (* because of that simple equivalence test is enough *)
+    let answ'' = refresh (Env.empty ()) Subst.empty answ in
+    (* printf "alpha-eq? \n    %s\n    %s\n" (generic_show argv'') (generic_show answ''); *)
+    argv'' = answ''
+  in
+  (* let _ = printf "tabling_hook %s\n" (generic_show argv') in *)
+  let is_cached = Cache.fold (fun acc answ -> acc || alpha_eq answ) false cache in
+  (* printf "is_cached? %d\n" (if is_cached then 1 else 0); *)
+  if not is_cached then begin
+    Cache.add cache (refine env subst (fun _ -> []) argv');
+    success st
+  end
+  else
+    failure ()
+
+type table = Env.t * ((Obj.t, Cache.t) Hashtbl.t)
+
+let make_table () = (Env.empty (), Hashtbl.create 1031)
+
+let tabled (empty_env, tbl) goal args_list ((env, subst, constr, _) as st) =
+  let argv = refine env subst (fun _ -> []) args_list in
+  let key  = refresh (Env.reset empty_env) Subst.empty argv in
+  try
+    let cache = Hashtbl.find tbl key in
+    (* printf "slave call %s\n" (generic_show key); *)
+    slave_call argv cache st
+  with Not_found ->
+    let cache = Cache.create () in
+    (* printf "master call %s\n" (generic_show key); *)
+    Hashtbl.add tbl key cache;
+    ((goal ()) &&& (tabling_hook argv cache)) st
+
+let tabled1 tbl goal q =
+  tabled tbl (fun () -> goal q) @@ Obj.repr [Obj.repr q;]
+
+let tabled2 tbl goal q r =
+  tabled tbl (fun () -> goal q r) @@ Obj.repr [Obj.repr q; Obj.repr r]
+
+let tabled3 tbl goal q r s =
+  tabled tbl (fun () -> goal q r s) @@ Obj.repr [Obj.repr q; Obj.repr r; Obj.repr s]
+
+let tabled4 tbl goal q r s t =
+  tabled tbl (fun () -> goal q r s t) @@ Obj.repr [Obj.repr q; Obj.repr r; Obj.repr s; Obj.repr t]
+
+let tabled5 tbl goal p q r s t =
+  tabled tbl (fun () -> goal p q r s t) @@ Obj.repr [Obj.repr p; Obj.repr q; Obj.repr r; Obj.repr s; Obj.repr t]
 
 let unify ?p (x: _ injected) y =
   Trace.(trace two @@ unif ?p) x y (
