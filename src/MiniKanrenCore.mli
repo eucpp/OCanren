@@ -27,7 +27,7 @@ module Stream :
 
     (** Stream type *)
     type 'a t
-    
+
     (** Emptiness test *)
     val is_empty : 'a t -> bool
 
@@ -65,7 +65,7 @@ module State :
   end
 
 (** Goal converts a state into a lazy stream of states *)
-type 'a goal'
+type 'a goal' = State.t -> 'a
 type goal = State.t Stream.internal goal'
 
 (** {3 Logic values} *)
@@ -91,7 +91,7 @@ val logic :
 val to_logic : 'a -> 'a logic
 
 (** [from_logic x] makes a regular value from a logic one.
-    Raises exception [Not_a_value] if [x] contains free variables 
+    Raises exception [Not_a_value] if [x] contains free variables
 *)
 val from_logic : 'a logic -> 'a
 
@@ -110,7 +110,7 @@ val inj : ('a, 'b) injected -> ('a, 'b logic) injected
 val (!!) : 'a -> ('a, 'a logic) injected
 
 (** [prj x] returns a regular value from injected representation.
-    Raises exception [Not_a_value] if [x] contains free variables 
+    Raises exception [Not_a_value] if [x] contains free variables
 *)
 val prj : ('a, 'b) injected -> 'a
 
@@ -121,10 +121,10 @@ val prj : ('a, 'b) injected -> 'a
 val call_fresh : (('a, 'b) injected -> goal) -> goal
 
 (** [x === y] creates a goal, which performs a unification of [x] and [y] *)
-val (===) : ('a, 'b logic) injected -> ('a, 'b logic) injected -> goal
+val (===) : ('a, 'b) injected -> ('a, 'b) injected -> goal
 
 (** [x =/= y] creates a goal, which introduces a disequality constraint for [x] and [y] *)
-val (=/=) : ('a, 'b logic) injected -> ('a, 'b logic) injected -> goal
+val (=/=) : ('a, 'b) injected -> ('a, 'b) injected -> goal
 
 (** [conj s1 s2] creates a goal, which is a conjunction of its arguments *)
 val conj : goal -> goal -> goal
@@ -138,18 +138,20 @@ val disj : goal -> goal -> goal
 (** [|||] is a left-associative infix synonym for [disj] *)
 val (|||) : goal -> goal -> goal
 
-(** [?| [s1; s2; ...; sk]] calculates [s1 ||| (s2 ||| ... ||| sk)...)] for a non-empty list of goals 
-    (note the {i right} association) 
+(** [?| [s1; s2; ...; sk]] calculates [s1 ||| (s2 ||| ... ||| sk)...)] for a non-empty list of goals
+    (note the {i right} association)
 *)
 val (?|) : goal list -> goal
 
 (** [conde] is a synonym for [?|] *)
 val conde : goal list -> goal
 
-(** [?& [s1; s2; ...; sk]] calculates [s1 &&& (s2 && ... &&& sk)...)] for a non-empty list of goals 
+(** [?& [s1; s2; ...; sk]] calculates [s1 &&& (s2 && ... &&& sk)...)] for a non-empty list of goals
     (note the {i right} association)
 *)
 val (?&) : goal list -> goal
+
+val (?~) : goal -> goal
 
 (** {2 Some predefined goals} *)
 
@@ -163,7 +165,7 @@ val failure : goal
 module Fresh :
   sig
     (** [succ num f] increments the number of free logic variables in
-        a goal; can be used to get rid of ``fresh'' syntax extension 
+        a goal; can be used to get rid of ``fresh'' syntax extension
     *)
     val succ : ('a -> 'b goal') -> ((_, _) injected -> 'a) -> 'b goal'
 
@@ -187,9 +189,9 @@ module Fresh :
 
 (** {2 Top-level running primitives} *)
 
-(** [run n g h] runs a goal [g] with [n] logical parameters and passes reified results to the handler [h]. 
-    The number of parameters is encoded using variadic machinery {a la} Olivier Danvy and represented by 
-    a number of predefined numerals and successor function (see below). The reification replaces each variable, 
+(** [run n g h] runs a goal [g] with [n] logical parameters and passes reified results to the handler [h].
+    The number of parameters is encoded using variadic machinery {a la} Olivier Danvy and represented by
+    a number of predefined numerals and successor function (see below). The reification replaces each variable,
     passed to [g], with the stream of values, associated with that variable as the goal succeeds.
 
     Examples:
@@ -216,7 +218,7 @@ type helper
 exception Not_a_value
 
 (** Reification result *)
-class type ['a,'b] reified = 
+class type ['a,'b] reified =
 object
   (** Returns [true] if the term has any free logic variable inside *)
   method is_open: bool
@@ -337,7 +339,44 @@ val qrst : unit ->
    (('t, 'u) reified Stream.t *
     (('v, 'w) reified Stream.t *
      (('x, 'y) reified Stream.t)))) *
-   ('b1 * ('c1 * ('d1 * ('e1 * 'f1))) -> ('b1 * ('c1 * ('d1 * 'e1))) * 'f1)
+   ('b1 * ('c1 * ('d1 * ('e1 * 'f1))) -> ('b1 * ('c1 * ('d1 * 'e1)))  * 'f1)
+
+module Tabling :
+  sig
+    val succ : (unit ->
+                (('a -> 'b) -> 'c) * ('d -> 'e -> 'f) * ('h -> 'i * 'j)) ->
+               unit ->
+               (('k * 'a -> 'b) -> 'k -> 'c) *
+               (('m -> 'd) -> 'm * 'e -> 'f) *
+               ('p * 'h -> ('p * 'i) * 'j)
+
+    val one : unit ->
+      (('a * 'b -> 'c) -> 'a -> 'b -> 'c) *
+      (('d -> 'e) -> 'd -> 'e) *
+      ('h -> 'h)
+
+    val two : unit ->
+      (('a * ('b * 'c) -> 'd) -> 'a -> 'b -> 'c -> 'd) *
+      (('e -> 'f -> 'g) -> 'e * 'f -> 'g) *
+      ('m * ('n * 'o) -> ('m * 'n) * 'o)
+
+    val three : unit ->
+      (('a * ('b * ('c * 'd)) -> 'e) -> 'a -> 'b -> 'c -> 'd -> 'e) *
+      (('f -> 'g -> 'h -> 'i) -> 'f * ('g * 'h) -> 'i) *
+      ('r * ('s * ('t * 'u)) -> ('r * ('s * 't)) * 'u)
+
+    val four : unit ->
+      (('a * ('b * ('c * ('d * 'e))) -> 'f) -> 'a -> 'b -> 'c -> 'd -> 'e -> 'f) *
+      (('g -> 'h -> 'i -> 'j -> 'k) -> 'g * ('h * ('i * 'j)) -> 'k) *
+      ('b1 * ('c1 * ('d1 * ('e1 * 'f1))) -> ('b1 * ('c1 * ('d1 * 'e1)))  * 'f1)
+
+    val five : unit ->
+      (('a * ('b * ('c * ('d * ('e * 'f)))) -> 'g) -> 'a -> 'b -> 'c -> 'd -> 'e -> 'f -> 'g) *
+      (('h -> 'i -> 'j -> 'k -> 'l -> 'm) -> 'h * ('i * ('j * ('k * 'l))) -> 'm) *
+      ('b1 * ('c1 * ('d1 * ('e1 * ('f1 * 'g1)))) -> ('b1 * ('c1 * ('d1 * ('e1 * 'f1)))) * 'g1)
+
+    val tabled : (unit -> (('a -> State.t Stream.internal) -> 'b) * ('c -> 'd -> goal) * ('a -> 'd * State.t)) -> 'c -> 'b
+  end
 
 (** {2 Building reifiers for a custom type compositionally} *)
 module type T1 =
