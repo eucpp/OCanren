@@ -533,44 +533,45 @@ let has_free_vars is_var x =
 
 exception WithFreeVars of (Obj.t -> bool) * Obj.t
 
-let rec refine : State.t -> ('a,'b) injected -> ('a,'b) injected = fun ((e, s, c) as st) x ->
-  let rec walk' recursive env var subst =
-    let var = Subst.walk env var subst in
-    match Env.var env var with
-    | None ->
-        (match wrap (Obj.repr var) with
-         | Unboxed _ -> !!!var
-         | Boxed (t, s, f) ->
-            let var = Obj.dup (Obj.repr var) in
-            let sf =
-              if t = Obj.double_array_tag
-              then !!! Obj.set_double_field
-              else Obj.set_field
-            in
-            for i = 0 to s - 1 do
-              sf var i (!!!(walk' true env (!!!(f i)) subst))
-           done;
-           !!!var
-         | Invalid n -> invalid_arg (sprintf "Invalid value for reconstruction (%d)" n)
-        )
-    | Some i when recursive ->
-        (match var with
-        | InnerVar (token1, token2, i, _) ->
-            (* We do not add extra Value here: they will be added on manual reification stage *)
-            let cs =
-              List.fold_left (fun acc s ->
-                match walk' false env (!!!var) s with
-                | maybeVar when Some i = Env.var env maybeVar -> acc
-                | t -> (!!!(refine st !!!t)) :: acc
-                )
-                []
-                c
-            in
-            Obj.magic @@ InnerVar (token1, token2, i, cs)
-        )
-    | _ -> var
-  in
-  !!!(walk' true e (!!!x) s)
+let rec refine : (int -> int) -> State.t -> ('a,'b) injected -> ('a,'b) injected =
+  fun refine_var ((e, s, c) as st) x ->
+    let rec walk' recursive env var subst =
+      let var = Subst.walk env var subst in
+      match Env.var env var with
+      | None ->
+          (match wrap (Obj.repr var) with
+           | Unboxed _ -> !!!var
+           | Boxed (t, s, f) ->
+              let var = Obj.dup (Obj.repr var) in
+              let sf =
+                if t = Obj.double_array_tag
+                then !!! Obj.set_double_field
+                else Obj.set_field
+              in
+              for i = 0 to s - 1 do
+                sf var i (!!!(walk' true env (!!!(f i)) subst))
+             done;
+             !!!var
+           | Invalid n -> invalid_arg (sprintf "Invalid value for reconstruction (%d)" n)
+          )
+      | Some i when recursive ->
+          (match var with
+          | InnerVar (token1, token2, i, _) ->
+              (* We do not add extra Value here: they will be added on manual reification stage *)
+              let cs =
+                List.fold_left (fun acc s ->
+                  match walk' false env (!!!var) s with
+                  | maybeVar when Some i = Env.var env maybeVar -> acc
+                  | t -> (!!!(refine refine_var st !!!t)) :: acc
+                  )
+                  []
+                  c
+              in
+              Obj.magic @@ InnerVar (token1, token2, refine_var i, cs)
+          )
+      | _ -> var
+    in
+    !!!(walk' true e (!!!x) s)
 
 module ExtractDeepest =
   struct
@@ -591,7 +592,7 @@ class type ['a,'b] refined = object
 end
 
 let make_rr : ('a, 'b) injected -> State.t -> ('a, 'b) refined = fun x st ->
-  let ans = refine st x in
+  let ans = refine (fun i -> i) st x in
   let is_open = has_free_vars (Env.is_var @@ State.env st) (Obj.repr ans) in
   let c: helper = !!!(object method isVar x = Env.is_var (State.env st) (Obj.repr x) end) in
   object(self)
@@ -677,6 +678,44 @@ let run n goalish f =
 
 let delay : (unit -> goal) -> goal = fun g ->
   fun st -> Stream.from_fun (fun () -> g () st)
+
+let slave_call argv cache ((env, subst, constr) as st) =
+  if Cache.is_empty then
+    Stream.Nil
+  else
+    let unify s x y = match s with
+      | Some s -> snd @@ Subst.unify env x (refine refresh subst y) (Some s)
+      | None   -> None
+    in
+    let rec consume cache =
+      let answ = Cache.hd cache in
+      let tl   = Cache.tl cache in
+      match List.fold_left2 unify (Some subst) argv answ with
+      | Some s -> Stream.cons s (consume tl)
+      | None   -> consume tl
+    in
+    consume cache
+
+let tabled g q r st =
+  let refine_var i =
+    let cnt = ref 0 in
+    let map = Hashtbl.create 127 in
+      try
+        Hashtbl.find map i
+      with Not_found ->
+        let j = !cnt;
+        cnt := !cnt + 1;
+        Hashtbl.add i j;
+        j
+  in
+  let tbl = Hashtbl.create 1031 in
+  let key = [refine refine_var q st; refine refine_var r st] in
+  try
+    let cache = Hashtbl.find tbl key in
+    ()
+  with Not_found ->
+    ()
+
 
 (* ************************************************************************** *)
 module type T1 = sig
