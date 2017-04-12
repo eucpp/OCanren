@@ -533,14 +533,16 @@ let has_free_vars is_var x =
 
 exception WithFreeVars of (Obj.t -> bool) * Obj.t
 
-let rec refine : (int -> int) -> State.t -> ('a,'b) injected -> ('a,'b) injected =
+let
+
+let rec refine : (State.t -> inner_logic -> ('a,'b) injected * State.t) -> State.t -> ('a,'b) injected -> ('a,'b) injected * State.t =
   fun refine_var ((e, s, c) as st) x ->
     let rec walk' recursive env var subst =
       let var = Subst.walk env var subst in
       match Env.var env var with
       | None ->
           (match wrap (Obj.repr var) with
-           | Unboxed _ -> !!!var
+           | Unboxed _ -> (!!!var, st)
            | Boxed (t, s, f) ->
               let var = Obj.dup (Obj.repr var) in
               let sf =
@@ -551,10 +553,10 @@ let rec refine : (int -> int) -> State.t -> ('a,'b) injected -> ('a,'b) injected
               for i = 0 to s - 1 do
                 sf var i (!!!(walk' true env (!!!(f i)) subst))
              done;
-             !!!var
+             (!!!var, st)
            | Invalid n -> invalid_arg (sprintf "Invalid value for reconstruction (%d)" n)
           )
-      | Some i when recursive ->
+      | Some i when recursive -> (* refine_var st var *)
           (match var with
           | InnerVar (token1, token2, i, _) ->
               (* We do not add extra Value here: they will be added on manual reification stage *)
@@ -567,7 +569,7 @@ let rec refine : (int -> int) -> State.t -> ('a,'b) injected -> ('a,'b) injected
                   []
                   c
               in
-              Obj.magic @@ InnerVar (token1, token2, refine_var i, cs)
+              (Obj.magic @@ InnerVar (token1, token2, refine_var i, cs), )
           )
       | _ -> var
     in
@@ -680,21 +682,21 @@ let delay : (unit -> goal) -> goal = fun g ->
   fun st -> Stream.from_fun (fun () -> g () st)
 
 let slave_call argv cache ((env, subst, constr) as st) =
-  if Cache.is_empty then
-    Stream.Nil
-  else
-    let unify s x y = match s with
-      | Some s -> snd @@ Subst.unify env x (refine refresh subst y) (Some s)
-      | None   -> None
-    in
-    let rec consume cache =
+  let unify s x y = match s with
+    | Some s -> snd @@ Subst.unify env x (refine refresh subst y) (Some s)
+    | None   -> None
+  in
+  let rec consume cache =
+    if Cache.is_empty then
+      Stream.Nil
+    else
       let answ = Cache.hd cache in
       let tl   = Cache.tl cache in
       match List.fold_left2 unify (Some subst) argv answ with
-      | Some s -> Stream.cons s (consume tl)
-      | None   -> consume tl
-    in
-    consume cache
+        | Some s -> Stream.cons (env, s, constr) (consume tl)
+        | None   -> consume tl
+  in
+  consume cache
 
 let tabled g q r st =
   let refine_var i =
