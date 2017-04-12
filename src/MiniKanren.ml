@@ -301,6 +301,8 @@ module Subst :
     val split   : t -> Obj.t list * Obj.t list
     val walk    : Env.t -> 'a -> t -> 'a
     val unify   : Env.t -> 'a -> 'a -> t option -> (int * content) list * t option
+    (* Unsafe extension of substitution *)
+    val extend  : Env.t -> 'a -> 'a -> t -> t
     val show    : t -> string
   end =
   struct
@@ -349,6 +351,13 @@ module Subst :
               else occurs env xi (!!!(f i)) subst || inner (i+1)
             in
             inner 0
+
+    let extend env x term subst =
+      match Env.var env x with
+      | Some xi ->
+        let cnt = make_content x term in
+        M.add xi cnt subst
+      | None -> invalid_arg "Logic variable expected as argument to extend"
 
     let unify env x y subst =
       let extend xi x term delta subst =
@@ -406,7 +415,6 @@ let rec refine : Env.t -> Subst.t -> Obj.t -> Obj.t = fun env subst x ->
               then !!! Obj.set_double_field
               else Obj.set_field
             in
-
             for i = 0 to s-1 do
               sf copy i @@ walk' (!!!(f i))
             done;
@@ -416,6 +424,39 @@ let rec refine : Env.t -> Subst.t -> Obj.t -> Obj.t = fun env subst x ->
     | Some _ -> var
   in
   walk' x
+
+let rec refresh : Env.t -> Subst.t -> Obj.t -> Env.t * Subst.t * Obj.t = fun env subst x ->
+  let rec walk' env subst term =
+    let var = Subst.walk env term subst in
+    match Env.var env term with
+    | None ->
+        (match wrap (Obj.repr var) with
+          | Unboxed _ -> (env, subst, Obj.repr var)
+          | Boxed (t, s, f) ->
+            let copy = Obj.dup (Obj.repr var) in (* not a shallow copy *)
+            let sf =
+              if t = Obj.double_array_tag
+              then !!! Obj.set_double_field
+              else Obj.set_field
+            in
+            let walk_obj e s i =
+              if i < s then
+                let e', s', new_field = walk' e s (!!!(f i)) in
+                sf copy i new_field;
+                walk_obj e' s' i+1
+              else
+                (e, s)
+            in
+            let env', subst' = walk_obj env subst 0 in
+            (env', subst', copy)
+          | Invalid n -> invalid_arg (sprintf "Invalid value for refreshing (%d)" n)
+        )
+    | Some _ ->
+      let fresh_var, env' = Env.fresh env in
+      let subst' = Subst.extend env' var fresh_var subst in
+      (env', subst', Obj.repr fresh_var)
+  in
+  walk' env subst x
 
 exception Disequality_violated
 
@@ -708,42 +749,37 @@ let run n goalish f =
 let delay : (unit -> goal) -> goal = fun g ->
   fun st -> Stream.from_fun (fun () -> g () st)
 
+(** ************************************************************************* *)
+(** Tabling primitives                                                        *)
+
 let slave_call argv cache ((env, subst, constr) as st) =
-  let unify s x y = match s with
-    | Some s -> snd @@ Subst.unify env x (refine refresh subst y) (Some s)
-    | None   -> None
-  in
   let rec consume cache =
     if Cache.is_empty then
       Stream.Nil
     else
       let answ = Cache.hd cache in
       let tl   = Cache.tl cache in
-      match List.fold_left2 unify (Some subst) argv answ with
+      match fst @@ Subst.unify env argv (refresh answ) (Some subst) with
         | Some s -> Stream.cons (env, s, constr) (consume tl)
         | None   -> consume tl
   in
   consume cache
 
-let tabled g q r st =
-  let refine_var i =
-    let cnt = ref 0 in
-    let map = Hashtbl.create 127 in
-      try
-        Hashtbl.find map i
-      with Not_found ->
-        let j = !cnt;
-        cnt := !cnt + 1;
-        Hashtbl.add i j;
-        j
-  in
+let tabling_hook argv cache_ref st =
+  if not Cache.contains argv then
+    cache_ref := copy_term argv
+
+let tabled goal q r st =
   let tbl = Hashtbl.create 1031 in
+  let argv = [q; r] in
   let key = [refine refine_var q st; refine refine_var r st] in
   try
-    let cache = Hashtbl.find tbl key in
-    ()
+    let cache_ref = Hashtbl.find tbl key in
+    slave_call argv !cache_ref st
   with Not_found ->
-    ()
+    let cache_ref = ref Cache.empty in
+    Hashtbl.add tbl key cache_ref;
+    (goal q r) &&& (tabling_hook [q; r] cache_ref)
 
 
 (* ************************************************************************** *)
