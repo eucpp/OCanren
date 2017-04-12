@@ -18,16 +18,58 @@
 
 open Printf
 
+module Cache :
+  sig
+    type t
+    type iter
+
+    val consume  : t -> iter -> Obj.t * iter
+    val add : t -> Obj.t -> unit
+
+    val start_iter : t -> iter
+    val end_iter   : t -> iter
+    val equal_iter : iter -> iter -> bool
+  end =
+  struct
+    type t = Obj.t list ref
+    type iter = Obj.t list
+
+    let consume cache it = (List.hd it, List.tl it)
+
+    let add cache x =
+      cache := List.cons x !cache
+
+    let start_iter cache = !cache
+    let end_iter _ = []
+    let equal_iter = (==)
+  end
+
 module Stream =
   struct
 
-    type 'a t = Nil | Cons of 'a * 'a t | Lazy of 'a t Lazy.t
+    type 'a t =
+      | Nil
+      | Cons of 'a * 'a t
+      | Lazy of 'a t Lazy.t
+      | Waiting of 'a suspended list
+    and 'a suspended =
+      {cache: Cache.t; seen : Cache.iter; thunk: 'a t Lazy.t}
 
     let from_fun (f: unit -> 'a t) : 'a t = Lazy (Lazy.from_fun f)
 
     let nil = Nil
 
     let cons h t = Cons (h, t)
+
+    (* let w_unwrap = function
+    | Waiting ss -> (match ss with
+        | {cache=cache; seen=seen; thunk=f}::ss ->
+          if not @@ Cache.equal_iter (Cache.start_iter cache) seen then
+            Lazy f
+          else
+
+        | [] ->
+      ) *)
 
     let rec is_empty = function
     | Nil    -> true
@@ -51,7 +93,7 @@ module Stream =
       match fs with
       | Nil           -> gs
       | Cons (hd, tl) -> cons hd @@ from_fun (fun () -> mplus gs tl)
-      | Lazy z        -> from_fun (fun () -> mplus gs (Lazy.force z) )
+      | Lazy z        -> from_fun (fun () -> mplus gs (Lazy.force z))
 
     let rec bind xs f =
       match xs with
@@ -753,21 +795,24 @@ let delay : (unit -> goal) -> goal = fun g ->
 (** Tabling primitives                                                        *)
 
 let slave_call argv cache ((env, subst, constr) as st) =
-  let rec consume cache =
-    if Cache.is_empty then
-      Stream.Nil
+  let rec consume it seen =
+    if Cache.equal_iter it seen then
+      let seen' = Cache.start_iter cache in
+      let f = Lazy.from_fun @@ fun () -> consume (Cache.start_iter cache) seen' in
+      Stream.Waiting [Stream.{cache = cache; seen = seen'; thunk = f}]
     else
-      let answ = Cache.hd cache in
-      let tl   = Cache.tl cache in
+      let x, it = Cache.consume cache it in
+      (* let answ = Cache.hd cache in *)
       match fst @@ Subst.unify env argv (refresh answ) (Some subst) with
-        | Some s -> Stream.cons (env, s, constr) (consume tl)
-        | None   -> consume tl
+        | Some s -> Stream.cons (env, s, constr) (consume it seen)
+        | None   -> failwith "Cannot unify cached term with argument term"
   in
-  consume cache
+  consume (Cache.start_iter cache) (Cache.end_iter cache)
 
 let tabling_hook argv cache_ref st =
-  if not Cache.contains argv then
-    cache_ref := copy_term argv
+  let argv' = refine argv st in
+  if not Cache.contains argv' then
+    cache_ref := Cache.add @@ argv'
 
 let tabled goal q r st =
   let tbl = Hashtbl.create 1031 in
