@@ -363,7 +363,7 @@ module Env :
           (Obj.is_block q) && q == (!!!global_token)
          )
       then (let q = Obj.field t 1 in
-            if (Obj.is_int q) && q == (!!!env_token) then begin
+            if (Obj.is_int q) (*&& q == (!!!env_token)*) then begin
               let InnerVar (_,_,i) = Obj.magic x in
               if i<n then Some i else raise (External_variable i)
             end
@@ -531,38 +531,40 @@ let rec refine : Env.t -> Subst.t -> Obj.t -> Obj.t = fun env subst x ->
 let rec refresh : Env.t -> Subst.t -> Obj.t -> Env.t * Subst.t * Obj.t = fun orig_env orig_subst x ->
   let rec walk' env subst term =
     let var = Subst.walk env term subst in
-    match Env.var env term with
-    | None ->
-        (match wrap (Obj.repr var) with
-          | Unboxed _ -> (env, subst, Obj.repr var)
-          | Boxed (tag, sz, f) ->
-            let copy = Obj.dup (Obj.repr var) in (* not a shallow copy *)
-            let sf =
-              if tag = Obj.double_array_tag
-              then !!! Obj.set_double_field
-              else Obj.set_field
-            in
-            let rec walk_obj e s i =
-              if i < sz then
-                let e', s', new_field = walk' e s (!!!(f i)) in
-                sf copy i new_field;
-                walk_obj e' s' (i+1)
-              else
-                (e, s)
-            in
-            let env', subst' = walk_obj env subst 0 in
-            (env', subst', copy)
-          | Invalid n -> invalid_arg (sprintf "Invalid value for refreshing (%d)" n)
-        )
-    | Some _ -> begin
-      try
-        let _ = Env.is_var orig_env term in
-        let fresh_var, env' = Env.fresh env in
-        let subst' = Subst.extend env' var fresh_var subst in
-        (env', subst', Obj.repr fresh_var)
-      with
-        | External_variable j -> (env, subst, term)
-    end
+    try
+      (match Env.var env term with
+      | None ->
+          (match wrap (Obj.repr var) with
+            | Unboxed _ -> (env, subst, Obj.repr var)
+            | Boxed (tag, sz, f) ->
+              let copy = Obj.dup (Obj.repr var) in (* not a shallow copy *)
+              let sf =
+                if tag = Obj.double_array_tag
+                then !!! Obj.set_double_field
+                else Obj.set_field
+              in
+              let rec walk_obj e s i =
+                if i < sz then
+                  let e', s', new_field = walk' e s (!!!(f i)) in
+                  sf copy i new_field;
+                  walk_obj e' s' (i+1)
+                else
+                  (e, s)
+              in
+              let env', subst' = walk_obj env subst 0 in
+              (env', subst', copy)
+            | Invalid n -> invalid_arg (sprintf "Invalid value for refreshing (%d)" n)
+          )
+      | Some _ -> begin
+        try
+          let _ = Env.is_var orig_env term in
+          let fresh_var, env' = Env.fresh env in
+          let subst' = Subst.extend env' var fresh_var subst in
+          (env', subst', Obj.repr fresh_var)
+        with
+          | External_variable j -> (env, subst, term)
+      end)
+    with External_variable _ -> (env, subst, term)
   in
   walk' orig_env orig_subst x
 
@@ -867,6 +869,7 @@ let slave_call argv cache ((env, subst, constr) as st) =
     else
       let x, it' = Cache.consume cache it in
       let env', subst', answ = refresh env subst x in
+      (* printf "consume from cache %s\n" (generic_show answ); *)
       match snd @@ Subst.unify env' argv answ (Some subst') with
         | Some s -> Stream.cons (env', s, constr) (consume it' seen)
         | None   -> failwith "Cannot unify cached term with argument term"
@@ -874,33 +877,44 @@ let slave_call argv cache ((env, subst, constr) as st) =
   consume (Cache.start_iter cache) (Cache.end_iter cache)
 
 let tabling_hook argv cache ((env, subst, constr) as st) =
+  let empty_env = Env.empty () in
+  (* refine argv in current subst *)
+  let argv' = refine env subst argv in
   (* rename all variables to 0 ... n *)
-  let argv' = refresh (Env.empty ()) Subst.empty argv in
+  let argv'' = refresh empty_env Subst.empty argv' in
   let alpha_eq answ =
     (* all variables in both terms are renamed to 0 ... n, *)
     (* because of that simple equivalence test is enough *)
-    argv' = (refresh (Env.empty ()) Subst.empty answ)
+    let answ'' = refresh empty_env Subst.empty answ in
+    (* printf "alpha-eq? \n    %s\n    %s\n" (generic_show argv'') (generic_show answ''); *)
+    argv'' = answ''
   in
+  (* let _ = printf "tabling_hook %s\n" (generic_show argv') in *)
   let is_cached = Cache.fold (fun acc answ -> acc || alpha_eq answ) false cache in
+  (* printf "is_cached? %d\n" (if is_cached then 1 else 0); *)
   if not is_cached then begin
-    Cache.add cache (Obj.repr argv);
-    Stream.cons st Stream.nil
+    Cache.add cache (refine env subst argv');
+    success st
   end
   else
-    Stream.nil
+    failure ()
 
-let tabled goal =
-  let tbl = Hashtbl.create 1031 in
-  fun q r ((env, subst, constr) as st) ->
-    let argv = Obj.repr [q; r] in
-    let key = refine env subst argv in
-    try
-      let cache = Hashtbl.find tbl key in
-      slave_call argv cache st
-    with Not_found ->
-      let cache = Cache.create () in
-      Hashtbl.add tbl key cache;
-      Stream.bind (goal q r st) (tabling_hook key cache)
+type table = (Obj.t, Cache.t) Hashtbl.t
+
+let make_table () = Hashtbl.create 1031
+
+let tabled tbl goal q r ((env, subst, constr) as st) =
+  let argv = refine env subst @@ Obj.repr [Obj.repr q; Obj.repr r] in
+  let _, _, key  = refresh (Env.empty ()) Subst.empty argv in
+  try
+    let cache = Hashtbl.find tbl key in
+    (* printf "slave call %s\n" (generic_show argv); *)
+    slave_call argv cache st
+  with Not_found ->
+    let cache = Cache.create () in
+    (* printf "master call %s\n" (generic_show argv); *)
+    Hashtbl.add tbl key cache;
+    ((goal q r) &&& (tabling_hook argv cache)) st
 
 
 (* ************************************************************************** *)

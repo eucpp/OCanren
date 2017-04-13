@@ -187,6 +187,16 @@ val run : (unit -> ('a -> 'c goal') * ('d -> 'e -> 'f) * (('g -> 'h -> 'e) * ('c
 *)
 val delay: (unit -> goal) -> goal
 
+(**
+
+ *)
+
+type table
+
+val make_table : unit -> table 
+
+val tabled : table -> ('a -> 'b -> goal) -> 'a -> 'b -> goal
+
 (** Reification helper *)
 type helper
 
