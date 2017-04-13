@@ -23,6 +23,9 @@ module Cache :
     type t
     type iter
 
+    val create : unit -> t
+
+    val fold : ('a -> Obj.t -> 'a) -> 'a -> t -> 'a
     val consume  : t -> iter -> Obj.t * iter
     val add : t -> Obj.t -> unit
 
@@ -33,6 +36,11 @@ module Cache :
   struct
     type t = Obj.t list ref
     type iter = Obj.t list
+
+    let create () = ref []
+
+    let fold f acc cache =
+      List.fold_left f acc !cache
 
     let consume cache it = (List.hd it, List.tl it)
 
@@ -60,6 +68,11 @@ module Stream =
     let nil = Nil
 
     let cons h t = Cons (h, t)
+
+    let make_waiting cache f =
+      let seen  = Cache.start_iter cache in
+      let thunk = Lazy.from_fun (fun () -> f (Cache.start_iter cache) seen) in
+      Waiting [{cache; seen; thunk}]
 
     let map_suspended f ss =
       let f' ({thunk=z;_} as s) =
@@ -307,6 +320,8 @@ end = struct
   let replace: key -> 'a list -> 'a t -> 'a t = M.add
 end
 
+exception External_variable of int
+
 module Env :
   sig
     type t
@@ -339,7 +354,7 @@ module Env :
       let v = InnerVar (global_token, dummy_token, dummy_index) in
       Obj.tag (!!! v), Obj.size (!!! v)
 
-    let var {token=env_token;_} x =
+    let var {token=env_token; next=n} x =
       (* There we detect if x is a logic variable and then that it belongs to current env *)
       let t = !!! x in
       if Obj.tag  t = var_tag  &&
@@ -348,9 +363,12 @@ module Env :
           (Obj.is_block q) && q == (!!!global_token)
          )
       then (let q = Obj.field t 1 in
-            if (Obj.is_int q) && q == (!!!env_token)
-            then let InnerVar (_,_,i) = !!! x in Some i
-            else failwith "You hacked everything and pass logic variables into wrong environment"
+            if (Obj.is_int q) && q == (!!!env_token) then begin
+              let InnerVar (_,_,i) = Obj.magic x in
+              if i<n then Some i else raise (External_variable i)
+            end
+            else
+              failwith "You hacked everything and pass logic variables into wrong environment"
             )
       else None
 
@@ -510,7 +528,7 @@ let rec refine : Env.t -> Subst.t -> Obj.t -> Obj.t = fun env subst x ->
   in
   walk' x
 
-let rec refresh : Env.t -> Subst.t -> Obj.t -> Env.t * Subst.t * Obj.t = fun env subst x ->
+let rec refresh : Env.t -> Subst.t -> Obj.t -> Env.t * Subst.t * Obj.t = fun orig_env orig_subst x ->
   let rec walk' env subst term =
     let var = Subst.walk env term subst in
     match Env.var env term with
@@ -536,12 +554,17 @@ let rec refresh : Env.t -> Subst.t -> Obj.t -> Env.t * Subst.t * Obj.t = fun env
             (env', subst', copy)
           | Invalid n -> invalid_arg (sprintf "Invalid value for refreshing (%d)" n)
         )
-    | Some _ ->
-      let fresh_var, env' = Env.fresh env in
-      let subst' = Subst.extend env' var fresh_var subst in
-      (env', subst', Obj.repr fresh_var)
+    | Some _ -> begin
+      try
+        let _ = Env.is_var orig_env term in
+        let fresh_var, env' = Env.fresh env in
+        let subst' = Subst.extend env' var fresh_var subst in
+        (env', subst', Obj.repr fresh_var)
+      with
+        | External_variable j -> (env, subst, term)
+    end
   in
-  walk' env subst x
+  walk' orig_env orig_subst x
 
 exception Disequality_violated
 
@@ -840,34 +863,44 @@ let delay : (unit -> goal) -> goal = fun g ->
 let slave_call argv cache ((env, subst, constr) as st) =
   let rec consume it seen =
     if Cache.equal_iter it seen then
-      let seen' = Cache.start_iter cache in
-      let f = Lazy.from_fun @@ fun () -> consume (Cache.start_iter cache) seen' in
-      Stream.Waiting [Stream.{cache = cache; seen = seen'; thunk = f}]
+      Stream.make_waiting cache consume
     else
-      let x, it = Cache.consume cache it in
-      (* let answ = Cache.hd cache in *)
-      match fst @@ Subst.unify env argv (refresh answ) (Some subst) with
-        | Some s -> Stream.cons (env, s, constr) (consume it seen)
+      let x, it' = Cache.consume cache it in
+      let env', subst', answ = refresh env subst x in
+      match snd @@ Subst.unify env' argv answ (Some subst') with
+        | Some s -> Stream.cons (env', s, constr) (consume it' seen)
         | None   -> failwith "Cannot unify cached term with argument term"
   in
   consume (Cache.start_iter cache) (Cache.end_iter cache)
 
-let tabling_hook argv cache_ref st =
-  let argv' = refine argv st in
-  if not Cache.contains argv' then
-    cache_ref := Cache.add @@ argv'
+let tabling_hook argv cache (env, subst, constr) =
+  (* rename all variables to 0 ... n *)
+  let argv' = refresh (Env.empty ()) Subst.empty argv' in
+  let alpha_eq answ =
+    (* all variables in both terms are renamed to 0 ... n, *)
+    (* because of that simple equivalence test is enough *)
+    argv' = (refresh (Env.empty ()) Subst.empty answ)
+  in
+  let is_cached = Cache.fold (fun acc answ -> acc || alpha_eq answ) false cache in
+  if not is_cached then begin
+    Cache.add cache (Obj.repr argv);
+    success
+    end
+  else
+    failure
 
-let tabled goal q r st =
+let tabled goal =
   let tbl = Hashtbl.create 1031 in
-  let argv = [q; r] in
-  let key = [refine refine_var q st; refine refine_var r st] in
-  try
-    let cache_ref = Hashtbl.find tbl key in
-    slave_call argv !cache_ref st
-  with Not_found ->
-    let cache_ref = ref Cache.empty in
-    Hashtbl.add tbl key cache_ref;
-    (goal q r) &&& (tabling_hook [q; r] cache_ref)
+  fun q r ((env, subst, constr) as st) ->
+    let argv = Obj.repr [q; r] in
+    let key = refine env subst argv in
+    try
+      let cache = Hashtbl.find tbl key in
+      slave_call argv cache st
+    with Not_found ->
+      let cache = Cache.create () in
+      Hashtbl.add tbl key cache;
+      (goal q r) &&& (tabling_hook key cache)
 
 
 (* ************************************************************************** *)
