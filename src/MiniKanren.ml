@@ -61,56 +61,90 @@ module Stream =
 
     let cons h t = Cons (h, t)
 
-    (* let w_unwrap = function
-    | Waiting ss -> (match ss with
-        | {cache=cache; seen=seen; thunk=f}::ss ->
-          if not @@ Cache.equal_iter (Cache.start_iter cache) seen then
-            Lazy f
-          else
-
-        | [] ->
-      ) *)
-
-    let rec is_empty = function
-    | Nil    -> true
-    | Lazy s -> is_empty @@ Lazy.force s
-    | _      -> false
-
-    let rec retrieve ?(n=(-1)) s =
-      if n = 0
-      then [], s
-      else match s with
-          | Nil          -> [], s
-          | Cons (x, xs) -> let xs', s' = retrieve ~n:(n-1) xs in x::xs', s'
-          | Lazy  z      -> retrieve ~n (Lazy.force z)
-
-    let take ?(n=(-1)) s = fst @@ retrieve ~n s
-
-    let hd s = List.hd @@ take ~n:1 s
-    let tl s = snd @@ retrieve ~n:1 s
+    let map_suspended f ss =
+      let f' ({thunk=z;_} as s) =
+        {s with thunk = Lazy.from_fun (fun () -> f (Lazy.force z))}
+      in
+      List.map f' ss
 
     let rec mplus fs gs =
       match fs with
       | Nil           -> gs
       | Cons (hd, tl) -> cons hd @@ from_fun (fun () -> mplus gs tl)
       | Lazy z        -> from_fun (fun () -> mplus gs (Lazy.force z))
+      (* handling waiting streams is tricky *)
+      | Waiting ss    -> (match unwrap_suspended ss, gs with
+        (* if [fs] hasn't unseen cached answers and [gs] is also a waiting stream then we merge them  *)
+        | Waiting ss, Waiting ss' -> Waiting (ss @ ss')
+        (* if [fs] hasn't unseen cached answers but [gs] is not a waiting stream then we swap them,
+           pushing waiting stream to the back of the new stream *)
+        | Waiting ss, _           -> mplus gs @@ Lazy (Lazy.from_fun (fun () -> fs))
+        (* if [fs] has unseen cached answers then [fs'] contains lazy stream ready to produce theese answers *)
+        | fs', _                  -> mplus fs' gs)
+    and unwrap_suspended ss =
+      let has_unseen {cache=cache; seen=seen; _} =
+        not @@ Cache.equal_iter (Cache.start_iter cache) seen
+      in
+      let rec find_unseen prefix = function
+        | ({thunk=f; _} as s)::ss ->
+          if has_unseen s then (Some (Lazy f), (List.rev prefix) @ ss) else find_unseen (s::prefix) ss
+        | [] -> (None, List.rev prefix)
+      in
+      match find_unseen [] ss with
+        | Some s, [] -> s
+        | Some s, ss -> mplus s @@ Waiting ss
+        | None  , ss -> Waiting ss
 
     let rec bind xs f =
       match xs with
       | Cons (x, xs) -> from_fun (fun () -> mplus (f x) (bind xs f))
       | Nil          -> nil
       | Lazy z       -> from_fun (fun () -> bind (Lazy.force z) f)
+      | Waiting ss   -> match unwrap_suspended ss with
+        | Waiting ss ->
+          let ss' = map_suspended (fun s -> bind s f) ss in
+          Waiting ss'
+        | xs' -> bind xs' f
 
+    let rec is_empty = function
+    | Nil         -> true
+    | Lazy s      -> is_empty @@ Lazy.force s
+    | Waiting ss  -> (match unwrap_suspended ss with
+        | Waiting _ -> true
+        | _         -> false
+      )
+    | _           -> false
+
+    let rec retrieve ?(n=(-1)) s =
+      if n = 0
+      then [], s
+      else match s with
+        | Nil          -> [], s
+        | Cons (x, xs) -> let xs', s' = retrieve ~n:(n-1) xs in x::xs', s'
+        | Lazy  z      -> retrieve ~n (Lazy.force z)
+        | Waiting ss   -> (match unwrap_suspended ss with
+          | Waiting ss -> [], s
+          | s'         -> retrieve ~n s')
+
+    let take ?(n=(-1)) s = fst @@ retrieve ~n s
+
+    let hd s = List.hd @@ take ~n:1 s
+    let tl s = snd @@ retrieve ~n:1 s
 
     let rec map f = function
     | Nil          -> Nil
     | Cons (x, xs) -> Cons (f x, map f xs)
     | Lazy s       -> Lazy (Lazy.from_fun (fun () -> map f @@ Lazy.force s))
+    | Waiting ss   -> Waiting (map_suspended f ss)
 
     let rec iter f = function
     | Nil          -> ()
     | Cons (x, xs) -> f x; iter f xs
     | Lazy s       -> iter f @@ Lazy.force s
+    | Waiting ss   -> (match unwrap_suspended ss with
+      | Waiting ss -> ()
+      | s -> iter f s
+      )
 
     let rec zip fs gs =
       match (fs, gs) with
@@ -118,7 +152,16 @@ module Stream =
       | Cons (x, xs), Cons (y, ys) -> Cons ((x, y), zip xs ys)
       | _           , Lazy s       -> Lazy (Lazy.from_fun (fun () -> zip fs (Lazy.force s)))
       | Lazy s      , _            -> Lazy (Lazy.from_fun (fun () -> zip (Lazy.force s) gs))
+      | Waiting ss, Waiting ss'    -> zip_waiting (unwrap_suspended ss) (unwrap_suspended ss')
+      | Waiting ss, _              -> zip_waiting (unwrap_suspended ss) gs
+      | _, Waiting ss              -> zip_waiting fs (unwrap_suspended ss)
       | Nil, _      | _, Nil       -> failwith "MiniKanren.Stream.zip: streams have different lengths"
+    and zip_waiting fs gs =
+      match (fs, gs) with
+      | Waiting ss, Waiting ss' -> Nil
+      | Waiting ss, _           -> failwith "MiniKanren.Stream.zip: streams have different lengths"
+      | _, Waiting ss           -> failwith "MiniKanren.Stream.zip: streams have different lengths"
+      | _, _                    -> zip fs gs
 
   end
 
