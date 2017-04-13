@@ -148,7 +148,7 @@ module Stream =
     | Nil          -> Nil
     | Cons (x, xs) -> Cons (f x, map f xs)
     | Lazy s       -> Lazy (Lazy.from_fun (fun () -> map f @@ Lazy.force s))
-    | Waiting ss   -> Waiting (map_suspended f ss)
+    | Waiting ss   -> Waiting (map_suspended (map f) ss)
 
     let rec iter f = function
     | Nil          -> ()
@@ -511,14 +511,14 @@ let rec refine : Env.t -> Subst.t -> Obj.t -> Obj.t = fun env subst x ->
     | None ->
         (match wrap (Obj.repr var) with
           | Unboxed _ -> Obj.repr var
-          | Boxed (t, s, f) ->
+          | Boxed (tag, sz, f) ->
             let copy = Obj.dup (Obj.repr var) in (* not a shallow copy *)
             let sf =
-              if t = Obj.double_array_tag
+              if tag = Obj.double_array_tag
               then !!! Obj.set_double_field
               else Obj.set_field
             in
-            for i = 0 to s-1 do
+            for i = 0 to sz-1 do
               sf copy i @@ walk' (!!!(f i))
             done;
             copy
@@ -535,18 +535,18 @@ let rec refresh : Env.t -> Subst.t -> Obj.t -> Env.t * Subst.t * Obj.t = fun ori
     | None ->
         (match wrap (Obj.repr var) with
           | Unboxed _ -> (env, subst, Obj.repr var)
-          | Boxed (t, s, f) ->
+          | Boxed (tag, sz, f) ->
             let copy = Obj.dup (Obj.repr var) in (* not a shallow copy *)
             let sf =
-              if t = Obj.double_array_tag
+              if tag = Obj.double_array_tag
               then !!! Obj.set_double_field
               else Obj.set_field
             in
-            let walk_obj e s i =
-              if i < s then
+            let rec walk_obj e s i =
+              if i < sz then
                 let e', s', new_field = walk' e s (!!!(f i)) in
                 sf copy i new_field;
-                walk_obj e' s' i+1
+                walk_obj e' s' (i+1)
               else
                 (e, s)
             in
@@ -873,9 +873,9 @@ let slave_call argv cache ((env, subst, constr) as st) =
   in
   consume (Cache.start_iter cache) (Cache.end_iter cache)
 
-let tabling_hook argv cache (env, subst, constr) =
+let tabling_hook argv cache ((env, subst, constr) as st) =
   (* rename all variables to 0 ... n *)
-  let argv' = refresh (Env.empty ()) Subst.empty argv' in
+  let argv' = refresh (Env.empty ()) Subst.empty argv in
   let alpha_eq answ =
     (* all variables in both terms are renamed to 0 ... n, *)
     (* because of that simple equivalence test is enough *)
@@ -884,10 +884,10 @@ let tabling_hook argv cache (env, subst, constr) =
   let is_cached = Cache.fold (fun acc answ -> acc || alpha_eq answ) false cache in
   if not is_cached then begin
     Cache.add cache (Obj.repr argv);
-    success
-    end
+    Stream.cons st Stream.nil
+  end
   else
-    failure
+    Stream.nil
 
 let tabled goal =
   let tbl = Hashtbl.create 1031 in
@@ -900,7 +900,7 @@ let tabled goal =
     with Not_found ->
       let cache = Cache.create () in
       Hashtbl.add tbl key cache;
-      (goal q r) &&& (tabling_hook key cache)
+      Stream.bind (goal q r st) (tabling_hook key cache)
 
 
 (* ************************************************************************** *)
