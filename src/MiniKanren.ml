@@ -903,8 +903,8 @@ type table = (Obj.t, Cache.t) Hashtbl.t
 
 let make_table () = Hashtbl.create 1031
 
-let tabled tbl goal q r ((env, subst, constr) as st) =
-  let argv = refine env subst @@ Obj.repr [Obj.repr q; Obj.repr r] in
+let tabled tbl goal args_list ((env, subst, constr) as st) =
+  let argv = refine env subst args_list in
   let _, _, key  = refresh (Env.empty ()) Subst.empty argv in
   try
     let cache = Hashtbl.find tbl key in
@@ -914,8 +914,22 @@ let tabled tbl goal q r ((env, subst, constr) as st) =
     let cache = Cache.create () in
     (* printf "master call %s\n" (generic_show argv); *)
     Hashtbl.add tbl key cache;
-    ((goal q r) &&& (tabling_hook argv cache)) st
+    ((goal ()) &&& (tabling_hook argv cache)) st
 
+let tabled1 tbl goal q =
+  tabled tbl (fun () -> goal q) @@ Obj.repr [Obj.repr q;]
+
+let tabled2 tbl goal q r =
+  tabled tbl (fun () -> goal q r) @@ Obj.repr [Obj.repr q; Obj.repr r]
+
+let tabled3 tbl goal q r s =
+  tabled tbl (fun () -> goal q r s) @@ Obj.repr [Obj.repr q; Obj.repr r; Obj.repr s]
+
+let tabled4 tbl goal q r s t =
+  tabled tbl (fun () -> goal q r s t) @@ Obj.repr [Obj.repr q; Obj.repr r; Obj.repr s; Obj.repr t]
+
+let tabled5 tbl goal p q r s t =
+  tabled tbl (fun () -> goal p q r s t) @@ Obj.repr [Obj.repr p; Obj.repr q; Obj.repr r; Obj.repr s; Obj.repr t] 
 
 (* ************************************************************************** *)
 module type T1 = sig
