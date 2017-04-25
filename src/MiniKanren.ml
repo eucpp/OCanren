@@ -642,15 +642,33 @@ let refiner = R.refiner
 
 module LogicAdder :
   sig
-    val zero : Env.t -> 'a -> 'a
-    (* val succ: ('a -> State.t -> Env.t * 'd) -> (('e, 'f) injected -> 'a) -> State.t -> Env.t * (('e, 'f) R.refiner * 'd) *)
-    val succ: (Env.t -> 'a -> State.t -> 'd) -> Env.t -> (('e, 'f) injected -> 'a) -> State.t -> (('e, 'f) R.refiner * 'd)
-  end = struct
-    let zero env f = f
+    val zero : 'a -> 'a
 
-    let succ prev env f =
+    (* val zero: (Env.t -> 'x) -> State.t -> State.t Stream.t *)
+    (* val one : (?env:Env.t -> ('a, 'b) injected -> State.t -> State.t Stream.t) -> State.t -> (('a, 'b) R.refiner * State.t Stream.t) *)
+    (* val two : (Env.t -> ('a, 'b) injected -> ('c, 'd) injected -> State.t Stream.t) -> State.t -> (('a, 'b) R.refiner * (('c, 'd) R.refiner * State.t Stream.t)) *)
+
+    (* val succ : ((?env:Ent.t -> 'c) -> State.t -> 'd) -> (?env:Ent.t -> ('a, 'b) injected -> 'c) -> State.t -> ('a, 'b) R.refiner * 'd *)
+    (* val succ: ('a -> State.t -> Env.t * 'd) -> (('e, 'f) injected -> 'a) -> State.t -> Env.t * (('e, 'f) R.refiner * 'd) *)
+    val succ: ('a -> State.t -> 'd) -> (('e, 'f) injected -> 'a) -> State.t -> (('e, 'f) R.refiner * 'd)
+  end = struct
+    let zero f = f
+
+    (* let one f = *)
+      (* call_fresh (fun logic ((env, s, c) as st) -> (R.refiner logic, f ~env logic st)) *)
+      (* (, f e ... st) *)
+
+    (* let succ prev f = *)
+      (* call_fresh (fun logic st -> (R.refiner logic, prev (fun e -> f e logic) st)) *)
+
+    (* let _:int = one *)
+    (* let _:int = succ one *)
+    (* let _:int = succ @@ succ one *)
+
+    let succ prev f =
       (* call_fresh (fun logic ((e, s, c) as st) -> (e, (R.refiner logic, snd @@ prev (f logic) st))) *)
-      call_fresh (fun logic st -> (R.refiner logic, prev env (f logic) st))
+      (* call_fresh (fun logic ((e, s, c) as st) -> (R.refiner logic, prev (fun e -> f e logic) st)) *)
+      call_fresh (fun logic ((e, s, c) as st) -> (R.refiner logic, prev (f logic) st))
 
     (* let la_one:int = succ zero *)
     (* let la_two:int = succ @@ succ zero *)
@@ -662,6 +680,10 @@ module LogicAdder :
     (* let _:int = la_one g1 *)
     (* let _:int = la_two g2 *)
   end
+
+(* let _:int = LogicAdder.(succ zero) *)
+
+(* let _:int = LogicAdder.(succ @@ succ zero) *)
 
 let one () = LogicAdder.(succ zero), (@@), ApplyLatest.two
 
@@ -680,12 +702,18 @@ let qrs   = three
 let qrst  = four
 let pqrst = five
 
-let run n goalish f =
+let run' n goalish f st =
   let adder, currier, app_num = n () in
+  let goal = adder goalish in
+  goal st |> ApplyLatest.apply app_num |> (currier f)
+
+let run n goalish f =
+  run' n goalish f @@ State.empty ()
+
+let run_with_env n goalish f =
   let st  = State.empty () in
   let env = State.env st in
-  let run f = f st in
-  run (adder env goalish) |> ApplyLatest.apply app_num |> (currier f)
+  run' n (goalish env) f st
 
 let delay : (unit -> goal) -> goal = fun g ->
   fun st -> Stream.from_fun (fun () -> g () st)
@@ -697,7 +725,7 @@ let delay : (unit -> goal) -> goal = fun g ->
 (* let _:string =
   let st = State.empty () in
   let h  = fun (qs:(int, int logic) refined Stream.t) -> 42 in
-  let g1 (x:('a, 'b) injected) (e:Env.t) = success in
+  let g1 (e:Env.t) (x:('a, 'b) injected) = success in
   let la = LogicAdder.((succ zero) (g1)) in
   ((@@) h)
    (ApplyLatest.(apply two) (la (State.env st) @@ st)) *)

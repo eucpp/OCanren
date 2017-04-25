@@ -56,8 +56,6 @@ module Stream :
 module Env :
   sig
     type t
-
-    val fresh  : t -> 'a * t
   end
 
 (** A state *)
@@ -104,6 +102,8 @@ val inj : ('a, 'b) injected -> ('a, 'b logic) injected
 
 (** A synonym for [fun x -> inj @@ lift x] (for non-parametric types) *)
 val (!!) : 'a -> ('a, 'a logic) injected
+
+val inj_logic : 'a '
 
 (** {2 miniKanren basic primitives} *)
 
@@ -183,7 +183,9 @@ module Fresh :
     - [run two        (fun q r -> q === !!5 ||| r === !!6) (fun qs rs -> ]{i here [qs], [rs] --- streams of all values, associated with the variable [q] and [r], respectively}[)]
     - [run (succ one) (fun q r -> q === !!5 ||| r === !!6) (fun qs rs -> ]{i the same as the above}[)]
  *)
-val run : (unit -> (Env.t -> 'a -> 'c goal') * ('d -> 'e -> 'f) * (('g -> 'h -> 'e) * ('c -> 'h * 'g))) -> 'a -> 'd -> 'f
+val run : (unit -> ('a -> 'c goal') * ('d -> 'e -> 'f) * (('g -> 'h -> 'e) * ('c -> 'h * 'g))) -> 'a -> 'd -> 'f
+
+val run_with_env : (unit -> ('a -> 'c goal') * ('d -> 'e -> 'f) * (('g -> 'h -> 'e) * ('c -> 'h * 'g))) -> (Env.t -> 'a) -> 'd -> 'f
 
 (**
   The primitive [delay] helps to construct recursive goals that depend on themselves. For example,
@@ -227,10 +229,10 @@ type ('a, 'b) refiner
 (** Successor function *)
 val succ :
            (unit ->
-            (Env.t -> 'a -> 'b goal') * ('c -> 'd -> 'e) *
+            ('a -> 'b goal') * ('c -> 'd -> 'e) *
             ((State.t Stream.t -> 'f -> 'g) * ('h -> 'i * 'j))) ->
            unit ->
-           (Env.t -> (('k, 'l) injected -> 'a) -> (('k, 'l) refiner * 'b) goal') *
+           ((('k, 'l) injected -> 'a) -> (('k, 'l) refiner * 'b) goal') *
            (('m -> 'c) -> 'm * 'd -> 'e) *
            ((State.t Stream.t ->
              ('n, 'o) refiner * 'f -> ('n, 'o) refined Stream.t * 'g) *
@@ -239,14 +241,14 @@ val succ :
 (** {3 Predefined numerals (one to five)} *)
 
 val one : unit ->
-  (Env.t -> (('a,'c) injected -> 'b goal') -> (('a, 'c) refiner * 'b) goal') *
+  ((('a,'c) injected -> 'b goal') -> (('a, 'c) refiner * 'b) goal') *
   (('d -> 'e) -> 'd -> 'e) *
   ((State.t Stream.t ->
     ('f, 'g) refiner -> ('f, 'g) refined Stream.t) *
     ('h -> 'h))
 
 val two : unit ->
-  (Env.t -> (('a,'d) injected -> ('b,'e) injected -> 'c goal') ->
+  ((('a,'d) injected -> ('b,'e) injected -> 'c goal') ->
     (('a, 'd) refiner * (('b, 'e) refiner * 'c)) goal') *
     (('f -> 'g -> 'h) -> 'f * 'g -> 'h) *
     ((State.t Stream.t ->
@@ -256,7 +258,7 @@ val two : unit ->
      ('m * ('n * 'o) -> ('m * 'n) * 'o))
 
 val three : unit ->
-  (Env.t -> (('a,'e) injected -> ('b, 'f) injected -> ('c, 'g) injected -> 'd goal') ->
+  ((('a,'e) injected -> ('b, 'f) injected -> ('c, 'g) injected -> 'd goal') ->
     (('a, 'e) refiner * (('b, 'f) refiner * (('c, 'g) refiner * 'd))) goal') *
    (('h -> 'i -> 'j -> 'k) -> 'h * ('i * 'j) -> 'k) *
    ((State.t Stream.t ->
@@ -267,7 +269,7 @@ val three : unit ->
     ('r * ('s * ('t * 'u)) -> ('r * ('s * 't)) * 'u))
 
 val four : unit ->
-  (Env.t -> (('a, 'g) injected -> ('b, 'h) injected -> ('c, 'i) injected -> ('d, 'j)  injected -> 'f goal') ->
+  ((('a, 'g) injected -> ('b, 'h) injected -> ('c, 'i) injected -> ('d, 'j)  injected -> 'f goal') ->
     (('a, 'g) refiner * (('b, 'h) refiner * (('c, 'i) refiner * (('d, 'j) refiner * 'f)))) goal') *
   (('l -> 'm -> 'n -> 'o -> 'q) ->
     'l * ('m * ('n * 'o)) -> 'q) *
@@ -281,7 +283,7 @@ val four : unit ->
      ('b1 * ('c1 * ('d1 * 'e1)))  * 'f1))
 
 val five : unit ->
-  (Env.t -> (('a, 'g) injected -> ('b, 'h) injected -> ('c, 'i) injected -> ('d, 'j)  injected -> ('e, 'k) injected -> 'f goal') ->
+  ((('a, 'g) injected -> ('b, 'h) injected -> ('c, 'i) injected -> ('d, 'j)  injected -> ('e, 'k) injected -> 'f goal') ->
    (('a, 'g) refiner *
     (('b, 'h) refiner *
      (('c, 'i) refiner * (('d, 'j) refiner * (('e, 'k) refiner * 'f))))) goal') *
@@ -301,14 +303,14 @@ val five : unit ->
 
 (** {3 The same numerals with conventional names} *)
 val q : unit ->
-  (Env.t -> (('a,'c) injected -> 'b goal') -> (('a, 'c) refiner * 'b) goal') *
+  ((('a,'c) injected -> 'b goal') -> (('a, 'c) refiner * 'b) goal') *
   (('d -> 'e) -> 'd -> 'e) *
   ((State.t Stream.t ->
     ('f, 'g) refiner -> ('f, 'g) refined Stream.t) *
     ('h -> 'h))
 
 val qr : unit ->
-  (Env.t -> (('a,'d) injected -> ('b,'e) injected -> 'c goal') ->
+  ((('a,'d) injected -> ('b,'e) injected -> 'c goal') ->
     (('a, 'd) refiner * (('b, 'e) refiner * 'c)) goal') *
     (('f -> 'g -> 'h) -> 'f * 'g -> 'h) *
     ((State.t Stream.t ->
@@ -318,7 +320,7 @@ val qr : unit ->
      ('m * ('n * 'o) -> ('m * 'n) * 'o))
 
 val qrs : unit ->
-  (Env.t -> (('a,'e) injected -> ('b, 'f) injected -> ('c, 'g) injected -> 'd goal') ->
+  ((('a,'e) injected -> ('b, 'f) injected -> ('c, 'g) injected -> 'd goal') ->
     (('a, 'e) refiner * (('b, 'f) refiner * (('c, 'g) refiner * 'd))) goal') *
    (('h -> 'i -> 'j -> 'k) -> 'h * ('i * 'j) -> 'k) *
    ((State.t Stream.t ->
@@ -329,7 +331,7 @@ val qrs : unit ->
     ('r * ('s * ('t * 'u)) -> ('r * ('s * 't)) * 'u))
 
 val qrst : unit ->
-  (Env.t -> (('a, 'g) injected -> ('b, 'h) injected -> ('c, 'i) injected -> ('d, 'j)  injected -> 'f goal') ->
+  ((('a, 'g) injected -> ('b, 'h) injected -> ('c, 'i) injected -> ('d, 'j)  injected -> 'f goal') ->
     (('a, 'g) refiner * (('b, 'h) refiner * (('c, 'i) refiner * (('d, 'j) refiner * 'f)))) goal') *
   (('l -> 'm -> 'n -> 'o -> 'q) ->
     'l * ('m * ('n * 'o)) -> 'q) *
