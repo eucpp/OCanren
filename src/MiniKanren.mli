@@ -103,7 +103,14 @@ val inj : ('a, 'b) injected -> ('a, 'b logic) injected
 (** A synonym for [fun x -> inj @@ lift x] (for non-parametric types) *)
 val (!!) : 'a -> ('a, 'a logic) injected
 
-val inj_logic : 'a '
+module Mapping :
+  sig
+    type t
+
+    val create : Env.t -> t
+  end
+
+val inj_logic : Mapping.t -> 'a logic -> ('a, 'a logic) injected
 
 (** {2 miniKanren basic primitives} *)
 

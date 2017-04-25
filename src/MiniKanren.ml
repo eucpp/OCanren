@@ -227,7 +227,7 @@ module Env :
     type t
 
     val empty  : unit -> t
-    val fresh  : t -> 'a * t
+    val fresh  : t -> 'a
     val var    : t -> 'a -> int option
     val is_var : t -> 'a -> bool
   end =
@@ -246,7 +246,7 @@ module Env :
       let v = InnerVar (global_token, e.token, e.next, []) in
       e.next <- 1+e.next;
       (* printf "new fresh var with index=%d\n" e.next; *)
-      (!!!v, e)
+      Obj.magic v
 
     let var_tag, var_size =
       let dummy_index = 0 in
@@ -403,9 +403,9 @@ module State =
 type 'a goal' = State.t -> 'a
 type goal = State.t Stream.t goal'
 
-let call_fresh f (env, subst, constr)  =
-  let x, env' = Env.fresh env in
-  f x (env', subst, constr)
+let call_fresh f ((env, _, _) as st)  =
+  let x = Env.fresh env in
+  f x st
 
 exception Disequality_violated
 
@@ -718,21 +718,26 @@ let run_with_env n goalish f =
 let delay : (unit -> goal) -> goal = fun g ->
   fun st -> Stream.from_fun (fun () -> g () st)
 
-(* let g a b = (a === b) *)
+(* ************************************************************************** *)
 
-(* let _:int = Uncurry.succ (@@) *)
+module Mapping =
+  struct
+    type t = Env.t * (int, inner_logic) Hashtbl.t
 
-(* let _:string =
-  let st = State.empty () in
-  let h  = fun (qs:(int, int logic) refined Stream.t) -> 42 in
-  let g1 (e:Env.t) (x:('a, 'b) injected) = success in
-  let la = LogicAdder.((succ zero) (g1)) in
-  ((@@) h)
-   (ApplyLatest.(apply two) (la (State.env st) @@ st)) *)
+    let create env = (env, Hashtbl.create 31)
+  end
 
-(* let _:int =  la_two (fun a b st -> g a b st) *)
-
-(* let _ = run q (fun q -> success) *)
+let inj_logic : Mapping.t -> 'a logic -> ('a, 'a logic) injected = fun (env, tbl) -> function
+  | Value x     -> x
+  | Var (i, []) ->
+    let fresh () =
+      let var = Env.fresh env in
+      Hashtbl.add tbl i var;
+      var
+    in
+    let var = try Hashtbl.find tbl i with Not_found -> fresh () in
+    Obj.magic var
+  | _ -> invalid_arg "Invalid logic value"
 
 (* ************************************************************************** *)
 module type T1 = sig
