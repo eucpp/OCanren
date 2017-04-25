@@ -1,39 +1,8 @@
 open MiniKanren
 open Tester
-(* open GT *)
-
-(* module Tree =
-  struct
-
-    module T =
-      struct
-        @type ('a, 't) t = Nil | Node of 'a * 't * 't with show, gmap
-
-        let fmap f g x = gmap(t) f g x
-     end
-
-  include T
-  include Fmap2 (T)
-
-  let nil = inj @@ distrib Nil
-  let node a l r  = inj @@ distrib (Node (a, l, r))
-
-  type tg = (int, tg) t
-  type tl = (int logic, tl) t logic
-  type ti = (tg, tl) injected
-
-  let rec show_ground x = show(t) (string_of_int) (show_ground) x
-  let rec show_logic  x = show(logic) (show(t) (show(logic) (string_of_int)) (show_logic)) x
-
-end *)
-
-(* let tree : Tree.tl = Tree.(Value (Node (Var (0, []), Var (1, []), Var (1, [])))) *)
-
-(* let show = Tree.show_ground (string_of_int) *)
 
 module Option =
   struct
-
     module T =
       struct
         type 'a t = 'a option
@@ -43,62 +12,54 @@ module Option =
     include T
     include Fmap1(T)
 
-    type tg = int T.t
-    type tl = int logic T.t logic
-    type ti = (tg, tl) injected
+    type 'a tg = 'a T.t
+    type 'a tl = 'a T.t logic
+    type ('a, 'b) ti = ('a tg, 'b tl) injected
 
     let some x  = inj @@ distrib (Some x)
     let none () = inj @@ distrib None
+
+    let rec show_ground sa x = GT.show(GT.option) sa x
+    let rec show_logic  sa x = GT.show(logic) (GT.show(GT.option) (GT.show(logic) sa)) x
   end
 
-let inj_of_int : Mapping.t -> int logic -> (int, int logic) injected = fun _m -> function
-   | Value n -> inj @@ lift n
-   | Var (_,_) -> Obj.magic 1
+module Tree =
+  struct
+    module T =
+      struct
+        @type ('a, 't) t = Nil | Node of 'a * 't * 't with show, gmap
 
-let inj_option env =
-  let m = Mapping.create env in
-  (* let fuck1 : (Mapping.t -> 'b -> ('a, 'b) injected) =  *)
-  let rec inj':(Mapping.t -> 'b -> ('a, 'b) injected) -> (Option.tl -> Option.ti) = fun f opt ->
-    match opt with
-    | Value opt -> Option.fmap (f m) opt |> Option.distrib |> inj
-    | Var (_,_) -> Obj.magic 2
+        let fmap f g x = GT.gmap(t) f g x
+     end
 
-  in
-  inj' inj_of_int
-    (* inj_logic m @@ gmap(logic) Option.() opt *)
+    include T
+    include Fmap2 (T)
 
-external llist_distrib : (('a,'c) injected, ('b,'d) injected) llist -> (('a, 'b) llist, ('c, 'd) llist) injected = "%identity"
+    let nil ()      = inj @@ distrib Nil
+    let node a l r  = inj @@ distrib @@ Node (a, l, r)
 
-let inj_list env :  int logic List.logic -> (int, int logic) List.groundi  =
-  let m = Mapping.create env in
-  (* let fuck1 : (Mapping.t -> 'b -> ('a, 'b) injected) =  *)
-  let rec inj':(Mapping.t -> 'b -> ('a, 'b) injected) -> (Mapping.t -> 'd -> ('c, 'd) injected) -> Mapping.t -> int logic List.logic -> (int, int logic) List.groundi =
-  fun f g m opt ->
-    match opt with
-    | Value opt -> GT.gmap(llist) (f m) (g m) opt |> llist_distrib |> inj
-    | Var (_,_) -> Obj.magic 2
-  in
-  let rec shit x = inj' inj_of_int shit x in
-  shit m
+    type 'a tg = ('a, 'a tg) t
+    type 'a tl = ('a , 'a tl) t logic
+    type ('a, 'b) ti = ('a tg, 'b tl) injected
 
-(* let rec inj_tree env tree =
-  let m = Mapping.create env in
-  let rec inj':(Tree.tl -> Tree.ti) = fun tree ->
-    inj_logic m @@ gmap(logic) Tree.(fun t -> inj @@ distrib @@ fmap (inj_logic m) (inj') t) tree
-  in
-  42 *)
-  (* let rec h = fun tree -> gmap(logic) Tree.(fun t -> inj @@ distrib @@ fmap (inj_logic m) (h) t) tree in *)
-  (* let rec inj' = inj_logic m @@ h tree in *)
-  (* let (_: int ) = inj' in *)
-  (* let rec inj' = fun tree -> inj_logic m @@ gmap(logic) Tree.(fun t -> distrib @@ fmap (inj_logic m) (inj') t) tree in *)
-  (* let tmp:int = Tree.(gmap(logic) (fun t -> distrib @@ fmap (inj_logic m) (inj_tree env) t) tree) in *)
-  (* inj' *)
-  (* inj_logic m @@ Tree.(gmap(logic) (fun t -> distrib @@ fmap (inj_logic m) (inj_logic m) t) tree) *)
+    let rec show_ground sa x = GT.show(t) sa (show_ground sa) x
+    let rec show_logic  sa x = GT.show(logic) (GT.show(t) (GT.show(logic) sa) (show_logic sa)) x
+  end
 
-(* let _ =
-  run_exn_with_env show_ground 1 q qh (REPR(fun env q ->
-    let t = inj_tree env tree in
+let inj_option env = Option.inj_logic (inj_logic) (Mapping.create env)
+
+let inj_tree env =
+  let rec inj_tree' m = Tree.inj_logic inj_logic (inj_tree') m in
+  inj_tree' @@ Mapping.create env
+
+let _ =
+  run_exn_with_env (Option.show_ground string_of_int) 1 q qh (REPR(fun env q ->
+      (q === Option.some !!42) &&&
+      (q === (inj_option env (Value (Some (Var (0, []))))))
+  ));
+
+  run_exn_with_env (Tree.show_ground string_of_int) 1 q qh (REPR(fun env q ->
     fresh (x)
-      (q === Tree.(node !!42 x nil)) &&&
-      (q === t)
-  )) *)
+      (q === Tree.(node !!42 x (nil ()))) &&&
+      (q === inj_tree env Tree.(Value (Node (Var (0, []), Var (1, []), Var (1, [])))))
+  ))

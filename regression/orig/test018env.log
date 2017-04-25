@@ -1,0 +1,12 @@
+fun env q ->
+  (&&&) ((===) q (Option.some ((!!) 42)))
+    ((===) q (inj_option env (Value (Some (Var (0, [])))))), 1 answer {
+q=Some (42);
+}
+fun env q ->
+  (&&&) (call_fresh (fun x -> (===) q Tree.(node ((!!) 42) x (nil ()))))
+    ((===) q
+       (inj_tree env
+          Tree.(Value (Node (Var (0, []), Var (1, []), Var (1, [])))))), 1 answer {
+q=Node (42, Nil (), Nil ());
+}

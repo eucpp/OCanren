@@ -392,12 +392,19 @@ module Fmap1 (T : T1) :
   sig
     val distrib : ('a,'b) injected T.t -> ('a T.t, 'b T.t) injected
     val reify : (helper -> ('a,'b) injected -> 'b) -> helper -> ('a T.t, 'b T.t logic as 'r) injected -> 'r
+
+    val inj_logic : (Mapping.t -> 'b -> ('a, 'b) injected) ->
+                     Mapping.t -> 'b T.t logic -> ('a T.t, 'b T.t logic) injected
   end
 
 module Fmap2 (T : T2) :
   sig
     val distrib : (('a,'c) injected, ('b,'d) injected) T.t -> (('a, 'b) T.t, ('c, 'd) T.t) injected
     val reify : (helper -> ('a, 'b) injected -> 'b) -> (helper -> ('c, 'd) injected -> 'd) -> helper -> (('a, 'c) T.t, ('b, 'd) T.t logic as 'r) injected -> 'r
+
+    val inj_logic : (Mapping.t -> 'b -> ('a, 'b) injected) ->
+                    (Mapping.t -> 'd -> ('c, 'd) injected) ->
+                     Mapping.t -> ('b, 'd) T.t logic -> (('a, 'c) T.t, ('b, 'd) T.t logic) injected
   end
 
 module Fmap3 (T : T3) :

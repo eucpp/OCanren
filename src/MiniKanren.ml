@@ -727,16 +727,18 @@ module Mapping =
     let create env = (env, Hashtbl.create 31)
   end
 
-let inj_logic : Mapping.t -> 'a logic -> ('a, 'a logic) injected = fun (env, tbl) -> function
+let inj_logic_var : Mapping.t -> int -> 'a = fun (env, tbl) i ->
+  let fresh () =
+    let var = Env.fresh env in
+    Hashtbl.add tbl i var;
+    var
+  in
+  let var = try Hashtbl.find tbl i with Not_found -> fresh () in
+  Obj.magic var
+
+let inj_logic : Mapping.t -> 'a logic -> ('a, 'a logic) injected = fun m -> function
   | Value x     -> x
-  | Var (i, []) ->
-    let fresh () =
-      let var = Env.fresh env in
-      Hashtbl.add tbl i var;
-      var
-    in
-    let var = try Hashtbl.find tbl i with Not_found -> fresh () in
-    Obj.magic var
+  | Var (i, []) -> inj_logic_var m i
   | _ -> invalid_arg "Invalid logic value"
 
 (* ************************************************************************** *)
@@ -779,6 +781,11 @@ module Fmap1 (T : T1) = struct
       if c#isVar x
       then var_of_injected_exn c x (reify arg_r)
       else Value (T.fmap (arg_r c) x)
+
+  let inj_logic f m = function
+    | Value x     -> T.fmap (f m) x |> distrib |> inj
+    | Var (i, []) -> inj_logic_var m i
+    | _ -> invalid_arg "Invalid logic value"
 end
 
 module Fmap2 (T : T2) = struct
@@ -791,6 +798,11 @@ module Fmap2 (T : T2) = struct
     = fun r1 r2 c x ->
       if c#isVar x then var_of_injected_exn c x (reify r1 r2)
       else Value (T.fmap (r1 c) (r2 c) x)
+
+  let inj_logic f g m = function
+    | Value x     -> T.fmap (f m) (g m) x |> distrib |> inj
+    | Var (i, []) -> inj_logic_var m i
+    | _ -> invalid_arg "Invalid logic value"
 end
 
 module Fmap3 (T : T3) = struct
