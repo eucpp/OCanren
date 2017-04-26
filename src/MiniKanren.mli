@@ -412,6 +412,11 @@ module Fmap3 (T : T3) :
     val distrib : (('a,'b) injected, ('c, 'd) injected, ('e, 'f) injected) T.t -> (('a, 'c, 'e) T.t, ('b, 'd, 'f) T.t) injected
     val reify : (helper -> ('a, 'b) injected -> 'b) -> (helper -> ('c, 'd) injected -> 'd) -> (helper -> ('e, 'f) injected -> 'f) ->
                 helper -> (('a, 'c, 'e) T.t, ('b, 'd, 'f) T.t logic as 'r) injected -> 'r
+
+    val inj_logic : (Mapping.t -> 'b -> ('a, 'b) injected) ->
+                    (Mapping.t -> 'd -> ('c, 'd) injected) ->
+                    (Mapping.t -> 'f -> ('e, 'f) injected) ->
+                     Mapping.t -> ('b, 'd, 'f) T.t logic -> (('a, 'c, 'e) T.t, ('b, 'd, 'f) T.t logic) injected
   end
 
   module Fmap4 (T : T4) :
@@ -422,6 +427,12 @@ module Fmap3 (T : T3) :
     val reify : (helper -> ('a, 'b) injected -> 'b) -> (helper -> ('c, 'd) injected -> 'd) ->
                 (helper -> ('e, 'f) injected -> 'f) -> (helper -> ('g, 'h) injected -> 'h) ->
                 helper -> (('a, 'c, 'e, 'g) T.t, ('b, 'd, 'f, 'h) T.t logic as 'r) injected -> 'r
+
+    val inj_logic : (Mapping.t -> 'b -> ('a, 'b) injected) ->
+                    (Mapping.t -> 'd -> ('c, 'd) injected) ->
+                    (Mapping.t -> 'f -> ('e, 'f) injected) ->
+                    (Mapping.t -> 'h -> ('g, 'h) injected) ->
+                     Mapping.t -> ('b, 'd, 'f, 'h) T.t logic -> (('a, 'c, 'e, 'g) T.t, ('b, 'd, 'f, 'h) T.t logic) injected
   end
 
   module Fmap5 (T : T5) :
@@ -432,6 +443,13 @@ module Fmap3 (T : T3) :
     val reify : (helper -> ('a, 'b) injected -> 'b) -> (helper -> ('c, 'd) injected -> 'd) -> (helper -> ('e, 'f) injected -> 'f) ->
                 (helper -> ('g, 'h) injected -> 'h) -> (helper -> ('i, 'j) injected -> 'j) ->
                 helper -> (('a, 'c, 'e, 'g, 'i) T.t, ('b, 'd, 'f, 'h, 'j) T.t logic as 'r) injected -> 'r
+
+    val inj_logic : (Mapping.t -> 'b -> ('a, 'b) injected) ->
+                    (Mapping.t -> 'd -> ('c, 'd) injected) ->
+                    (Mapping.t -> 'f -> ('e, 'f) injected) ->
+                    (Mapping.t -> 'h -> ('g, 'h) injected) ->
+                    (Mapping.t -> 'j -> ('i, 'j) injected) ->
+                     Mapping.t -> ('b, 'd, 'f, 'h, 'j) T.t logic -> (('a, 'c, 'e, 'g, 'i) T.t, ('b, 'd, 'f, 'h, 'j) T.t logic) injected
   end
 
   module Fmap6 (T : T6) :
@@ -442,6 +460,14 @@ module Fmap3 (T : T3) :
     val reify : (helper -> ('a, 'b) injected -> 'b) -> (helper -> ('c, 'd) injected -> 'd) -> (helper -> ('e, 'f) injected -> 'f) ->
                 (helper -> ('g, 'h) injected -> 'h) -> (helper -> ('i, 'j) injected -> 'j) -> (helper -> ('k, 'l) injected -> 'l) ->
                 helper -> (('a, 'c, 'e, 'g, 'i, 'k) T.t, ('b, 'd, 'f, 'h, 'j, 'l) T.t logic as 'r) injected -> 'r
+
+    val inj_logic : (Mapping.t -> 'b -> ('a, 'b) injected) ->
+                    (Mapping.t -> 'd -> ('c, 'd) injected) ->
+                    (Mapping.t -> 'f -> ('e, 'f) injected) ->
+                    (Mapping.t -> 'h -> ('g, 'h) injected) ->
+                    (Mapping.t -> 'j -> ('i, 'j) injected) ->
+                    (Mapping.t -> 'l -> ('k, 'l) injected) ->
+                     Mapping.t -> ('b, 'd, 'f, 'h, 'j, 'l) T.t logic -> (('a, 'c, 'e, 'g, 'i, 'k) T.t, ('b, 'd, 'f, 'h, 'j, 'l) T.t logic) injected
   end
 
 module ManualReifiers :

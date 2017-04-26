@@ -812,6 +812,11 @@ module Fmap3 (T : T3) = struct
   let rec reify r1 r2 r3 (c: helper) x =
     if c#isVar x then var_of_injected_exn c x (reify r1 r2 r3)
     else Value (T.fmap (r1 c) (r2 c) (r3 c) x)
+
+  let inj_logic f g h m = function
+    | Value x     -> T.fmap (f m) (g m) (h m) x |> distrib |> inj
+    | Var (i, []) -> inj_logic_var m i
+    | _ -> invalid_arg "Invalid logic value"
 end
 
 module Fmap4 (T : T4) = struct
@@ -822,6 +827,11 @@ module Fmap4 (T : T4) = struct
   let rec reify r1 r2 r3 r4 (c: helper) x =
     if c#isVar x then var_of_injected_exn c x (reify r1 r2 r3 r4)
     else Value (T.fmap (r1 c) (r2 c) (r3 c) (r4 c) x)
+
+  let inj_logic f g h k m = function
+    | Value x     -> T.fmap (f m) (g m) (h m) (k m) x |> distrib |> inj
+    | Var (i, []) -> inj_logic_var m i
+    | _ -> invalid_arg "Invalid logic value"
 end
 
 module Fmap5 (T : T5) = struct
@@ -832,6 +842,11 @@ module Fmap5 (T : T5) = struct
   let rec reify r1 r2 r3 r4 r5 (c: helper) x =
     if c#isVar x then var_of_injected_exn c x (reify r1 r2 r3 r4 r5)
     else Value (T.fmap (r1 c) (r2 c) (r3 c) (r4 c) (r5 c) x)
+
+  let inj_logic f g h k u m = function
+    | Value x     -> T.fmap (f m) (g m) (h m) (k m) (u m) x |> distrib |> inj
+    | Var (i, []) -> inj_logic_var m i
+    | _ -> invalid_arg "Invalid logic value"
 end
 
 module Fmap6 (T : T6) = struct
@@ -842,6 +857,11 @@ module Fmap6 (T : T6) = struct
   let rec reify r1 r2 r3 r4 r5 r6 (c: helper) x =
     if c#isVar x then var_of_injected_exn c x (reify r1 r2 r3 r4 r5 r6)
     else Value (T.fmap (r1 c) (r2 c) (r3 c) (r4 c) (r5 c) (r6 c) x)
+
+  let inj_logic f g h k u v m = function
+    | Value x     -> T.fmap (f m) (g m) (h m) (k m) (u m) (v m) x |> distrib |> inj
+    | Var (i, []) -> inj_logic_var m i
+    | _ -> invalid_arg "Invalid logic value"
 end
 
 module Pair = struct
