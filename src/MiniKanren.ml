@@ -643,47 +643,13 @@ let refiner = R.refiner
 module LogicAdder :
   sig
     val zero : 'a -> 'a
-
-    (* val zero: (Env.t -> 'x) -> State.t -> State.t Stream.t *)
-    (* val one : (?env:Env.t -> ('a, 'b) injected -> State.t -> State.t Stream.t) -> State.t -> (('a, 'b) R.refiner * State.t Stream.t) *)
-    (* val two : (Env.t -> ('a, 'b) injected -> ('c, 'd) injected -> State.t Stream.t) -> State.t -> (('a, 'b) R.refiner * (('c, 'd) R.refiner * State.t Stream.t)) *)
-
-    (* val succ : ((?env:Ent.t -> 'c) -> State.t -> 'd) -> (?env:Ent.t -> ('a, 'b) injected -> 'c) -> State.t -> ('a, 'b) R.refiner * 'd *)
-    (* val succ: ('a -> State.t -> Env.t * 'd) -> (('e, 'f) injected -> 'a) -> State.t -> Env.t * (('e, 'f) R.refiner * 'd) *)
     val succ: ('a -> State.t -> 'd) -> (('e, 'f) injected -> 'a) -> State.t -> (('e, 'f) R.refiner * 'd)
   end = struct
     let zero f = f
 
-    (* let one f = *)
-      (* call_fresh (fun logic ((env, s, c) as st) -> (R.refiner logic, f ~env logic st)) *)
-      (* (, f e ... st) *)
-
-    (* let succ prev f = *)
-      (* call_fresh (fun logic st -> (R.refiner logic, prev (fun e -> f e logic) st)) *)
-
-    (* let _:int = one *)
-    (* let _:int = succ one *)
-    (* let _:int = succ @@ succ one *)
-
     let succ prev f =
-      (* call_fresh (fun logic ((e, s, c) as st) -> (e, (R.refiner logic, snd @@ prev (f logic) st))) *)
-      (* call_fresh (fun logic ((e, s, c) as st) -> (R.refiner logic, prev (fun e -> f e logic) st)) *)
       call_fresh (fun logic ((e, s, c) as st) -> (R.refiner logic, prev (f logic) st))
-
-    (* let la_one:int = succ zero *)
-    (* let la_two:int = succ @@ succ zero *)
-
-    (* let g1 (x:('a, 'b) injected) (e:Env.t) = success *)
-
-    (* let g2 (x:('a, 'b) injected) (y:('c, 'd) injected) (e:Env.t) = success *)
-
-    (* let _:int = la_one g1 *)
-    (* let _:int = la_two g2 *)
   end
-
-(* let _:int = LogicAdder.(succ zero) *)
-
-(* let _:int = LogicAdder.(succ @@ succ zero) *)
 
 let one () = LogicAdder.(succ zero), (@@), ApplyLatest.two
 
