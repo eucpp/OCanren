@@ -183,18 +183,18 @@ val call_fresh : (('a, 'b) injected -> goal) -> goal
 val report_counters : unit -> unit
 
 (** [x === y] creates a goal, which performs a unification of [x] and [y] *)
-val (===) : ('a, 'b logic) injected -> ('a, 'b logic) injected -> goal
+val (===) : ?loc:string -> ('a, 'b) injected -> ('a, 'b) injected -> goal
 
 (** [unify ~p x y] same as (x === y) but allows to pass a printer for unified terms.
     When [p] is not omitted the string representations of terms are included to the listenable event *)
-val unify : ?p:('a, 'b logic) printer -> ('a, 'b logic) injected -> ('a, 'b logic) injected -> goal
+val unify : ?p:('a, 'b) printer -> ('a, 'b) injected -> ('a, 'b) injected -> goal
 
 (** [x =/= y] creates a goal, which introduces a disequality constraint for [x] and [y] *)
-val (=/=) : ('a, 'b logic) injected -> ('a, 'b logic) injected -> goal
+val (=/=) : ('a, 'b) injected -> ('a, 'b) injected -> goal
 
 (** [diseq ~p x y] same as (x =/= y) but allows to pass a printer for terms.
     When [p] is not omitted the string representations of terms are included to the listenable event *)
-val diseq : ?p:('a, 'b logic) printer -> ('a, 'b logic) injected -> ('a, 'b logic) injected -> goal
+val diseq : ?p:('a, 'b) printer -> ('a, 'b) injected -> ('a, 'b) injected -> goal
 
 (** [conj s1 s2] creates a goal, which is a conjunction of its arguments *)
 val conj : goal -> goal -> goal
