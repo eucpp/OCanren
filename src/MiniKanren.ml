@@ -326,10 +326,11 @@ module Env :
   sig
     type t
 
-    val empty  : unit -> t
-    val fresh  : t -> 'a * t
-    val var    : t -> 'a -> int option
-    val is_var : t -> 'a -> bool
+    val empty    : unit -> t
+    val reset    : t -> t
+    val fresh    : t -> 'a
+    val var      : t -> 'a -> int option
+    val is_var   : t -> 'a -> bool
   end =
   struct
     type t = { token : token_env;
@@ -338,15 +339,18 @@ module Env :
               }
 
     let last_token : token_env ref = ref 0
+
     let empty () =
       incr last_token;
-      { token= !last_token; next=10 }
+      { token = !last_token; next = 10 }
+
+    let reset env = { env with next = 10 }
 
     let fresh e =
       let v = InnerVar (global_token, e.token, e.next) in
       e.next <- 1+e.next;
       (* printf "new fresh var with index=%d\n" e.next; *)
-      (!!!v, e)
+      !!!v
 
     let var_tag, var_size =
       let dummy_index = 0 in
@@ -363,10 +367,9 @@ module Env :
           (Obj.is_block q) && q == (!!!global_token)
          )
       then (let q = Obj.field t 1 in
-            if (Obj.is_int q) (*&& q == (!!!env_token)*) then begin
+            if (Obj.is_int q) (*&& q == (!!!env_token)*) then
               let InnerVar (_,_,i) = Obj.magic x in
-              if i<n then Some i else raise (External_variable i)
-            end
+              Some i
             else
               failwith "You hacked everything and pass logic variables into wrong environment"
             )
@@ -456,6 +459,7 @@ module Subst :
             inner 0
 
     let extend env x term subst =
+      let _ = print_endline @@ generic_show env in
       match Env.var env x with
       | Some xi ->
         let cnt = make_content x term in
@@ -528,14 +532,14 @@ let rec refine : Env.t -> Subst.t -> Obj.t -> Obj.t = fun env subst x ->
   in
   walk' x
 
-let rec refresh : Env.t -> Subst.t -> Obj.t -> Env.t * Subst.t * Obj.t = fun orig_env orig_subst x ->
-  let rec walk' env subst term =
+let rec refresh : Env.t -> Subst.t -> Obj.t -> Obj.t = fun env subst x ->
+  let tbl = Hashtbl.create 31 in
+  let rec walk' term =
     let var = Subst.walk env term subst in
-    try
-      (match Env.var env term with
+      (match Env.var env var with
       | None ->
           (match wrap (Obj.repr var) with
-            | Unboxed _ -> (env, subst, Obj.repr var)
+            | Unboxed _ -> Obj.repr var
             | Boxed (tag, sz, f) ->
               let copy = Obj.dup (Obj.repr var) in (* not a shallow copy *)
               let sf =
@@ -543,30 +547,29 @@ let rec refresh : Env.t -> Subst.t -> Obj.t -> Env.t * Subst.t * Obj.t = fun ori
                 then !!! Obj.set_double_field
                 else Obj.set_field
               in
-              let rec walk_obj e s i =
+              let rec walk_obj i =
                 if i < sz then
-                  let e', s', new_field = walk' e s (!!!(f i)) in
+                  let new_field = walk' (!!!(f i)) in
                   sf copy i new_field;
-                  walk_obj e' s' (i+1)
+                  walk_obj (i+1)
                 else
-                  (e, s)
+                  ()
               in
-              let env', subst' = walk_obj env subst 0 in
-              (env', subst', copy)
+              let subst' = walk_obj 0 in
+              copy
             | Invalid n -> invalid_arg (sprintf "Invalid value for refreshing (%d)" n)
           )
       | Some _ -> begin
         try
-          let _ = Env.is_var orig_env term in
-          let fresh_var, env' = Env.fresh env in
-          let subst' = Subst.extend env' var fresh_var subst in
-          (env', subst', Obj.repr fresh_var)
-        with
-          | External_variable j -> (env, subst, term)
-      end)
-    with External_variable _ -> (env, subst, term)
+          Hashtbl.find tbl var
+        with Not_found ->
+          let fresh_var = Env.fresh env in
+          Hashtbl.add tbl var fresh_var;
+          Obj.repr fresh_var
+        end
+    )
   in
-  walk' orig_env orig_subst x
+  walk' x
 
 exception Disequality_violated
 
@@ -661,8 +664,8 @@ type 'a goal' = State.t -> 'a
 type goal = State.t Stream.t goal'
 
 let call_fresh f (env, subst, constr)  =
-  let x, env' = Env.fresh env in
-  f x (env', subst, constr)
+  let x = Env.fresh env in
+  f x (env, subst, constr)
 
 let (===) (x: _ injected) y (env, subst, constr) =
   (* we should always unify two injected types *)
@@ -868,24 +871,24 @@ let slave_call argv cache ((env, subst, constr) as st) =
       Stream.make_waiting cache consume
     else
       let x, it' = Cache.consume cache it in
-      let env', subst', answ = refresh env subst x in
+      let answ = refresh env subst x in
       (* printf "consume from cache %s\n" (generic_show answ); *)
-      match snd @@ Subst.unify env' argv answ (Some subst') with
-        | Some s -> Stream.cons (env', s, constr) (consume it' seen)
+      match snd @@ Subst.unify env argv answ (Some subst) with
+        | Some s -> Stream.cons (env, s, constr) (consume it' seen)
         | None   -> failwith "Cannot unify cached term with argument term"
   in
   consume (Cache.start_iter cache) (Cache.end_iter cache)
 
 let tabling_hook argv cache ((env, subst, constr) as st) =
-  let empty_env = Env.empty () in
+  (* let empty_env = Env.empty () in *)
   (* refine argv in current subst *)
   let argv' = refine env subst argv in
   (* rename all variables to 0 ... n *)
-  let argv'' = refresh empty_env Subst.empty argv' in
+  let argv'' = refresh (Env.empty ()) Subst.empty argv' in
   let alpha_eq answ =
     (* all variables in both terms are renamed to 0 ... n, *)
     (* because of that simple equivalence test is enough *)
-    let answ'' = refresh empty_env Subst.empty answ in
+    let answ'' = refresh (Env.empty ()) Subst.empty answ in
     (* printf "alpha-eq? \n    %s\n    %s\n" (generic_show argv'') (generic_show answ''); *)
     argv'' = answ''
   in
@@ -899,20 +902,20 @@ let tabling_hook argv cache ((env, subst, constr) as st) =
   else
     failure ()
 
-type table = (Obj.t, Cache.t) Hashtbl.t
+type table = Env.t * ((Obj.t, Cache.t) Hashtbl.t)
 
-let make_table () = Hashtbl.create 1031
+let make_table () = (Env.empty (), Hashtbl.create 1031)
 
-let tabled tbl goal args_list ((env, subst, constr) as st) =
+let tabled (empty_env, tbl) goal args_list ((env, subst, constr) as st) =
   let argv = refine env subst args_list in
-  let _, _, key  = refresh (Env.empty ()) Subst.empty argv in
+  let key  = refresh (Env.reset empty_env) Subst.empty argv in
   try
     let cache = Hashtbl.find tbl key in
-    (* printf "slave call %s\n" (generic_show argv); *)
+    (* printf "slave call %s\n" (generic_show key); *)
     slave_call argv cache st
   with Not_found ->
     let cache = Cache.create () in
-    (* printf "master call %s\n" (generic_show argv); *)
+    (* printf "master call %s\n" (generic_show key); *)
     Hashtbl.add tbl key cache;
     ((goal ()) &&& (tabling_hook argv cache)) st
 
@@ -929,7 +932,7 @@ let tabled4 tbl goal q r s t =
   tabled tbl (fun () -> goal q r s t) @@ Obj.repr [Obj.repr q; Obj.repr r; Obj.repr s; Obj.repr t]
 
 let tabled5 tbl goal p q r s t =
-  tabled tbl (fun () -> goal p q r s t) @@ Obj.repr [Obj.repr p; Obj.repr q; Obj.repr r; Obj.repr s; Obj.repr t] 
+  tabled tbl (fun () -> goal p q r s t) @@ Obj.repr [Obj.repr p; Obj.repr q; Obj.repr r; Obj.repr s; Obj.repr t]
 
 (* ************************************************************************** *)
 module type T1 = sig
@@ -1212,8 +1215,8 @@ module Nat = struct
     let rec to_int   = function O -> 0 | S n -> 1 + to_int n
     let prj_ground   = to_int
 
-    let rec inj_ground: ground -> logic = fun n ->
-      Value (GT.(gmap lnat) inj_ground n)
+    let rec to_logic: ground -> logic = fun n ->
+      Value (GT.(gmap lnat) to_logic n)
 
     let o = inj@@lift O
     let s x = inj@@lift (S x)

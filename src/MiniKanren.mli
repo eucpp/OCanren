@@ -578,7 +578,7 @@ module Nat :
     val to_int : ground -> int
 
     (** Inject flat ground nat to logic nat *)
-    val inj_ground: ground -> logic
+    val to_logic: ground -> logic
 
     (** Project ground Peano number to plain int *)
     val prj_ground : ground -> int
