@@ -482,6 +482,9 @@ module ManualReifiers :
 | O
 | S of 'a with show, html, eq, compare, foldl, foldr, gmap
 
+(** Abstract rational type *)
+@type 'a lrational = { num : 'a; denom : 'a } with show, html, eq, compare, foldl, foldr, gmap;;
+
 (** {3 Relations on booleans} *)
 module Bool :
   sig
@@ -615,6 +618,7 @@ module Nat :
     val inj : ground -> groundi
 
     val zero : groundi
+    val one  : groundi
     val succ : groundi -> groundi
 
     (** Relational addition *)
@@ -642,8 +646,93 @@ module Nat :
     val (<)  : groundi -> groundi -> goal
   end
 
-(** [inj_nat n] is a deforested synonym for injection *)
-val inj_nat : int -> Nat.groundi
+  module Rational :
+    sig
+      (** Type synonym to prevent toplevel [logic] from being hidden *)
+      type 'a logic' = 'a logic
+
+      (** Synonym for abstract rational type *)
+      type 'a t = 'a lrational
+
+      (** Ground rational *)
+      type ground = Nat.ground t
+
+      (** Logic rational *)
+      type logic = Nat.logic t logic'
+
+      (** Reifier *)
+      val reify : helper -> (ground, logic) injected -> logic
+
+      (** GT-compatible typeinfo for [ground] *)
+      val ground :
+        (unit,
+         < compare : ground -> ground -> GT.comparison;
+           eq      : ground -> ground -> bool;
+           foldl   : 'a -> ground -> 'a;
+           foldr   : 'a -> ground -> 'a;
+           gmap    : ground -> ground;
+           html    : ground -> HTML.viewer;
+           show    : ground -> string >)
+        GT.t
+
+      (** GT-compatible typeinfo for [logic] *)
+      val logic :
+        (unit,
+         < compare : logic -> logic -> GT.comparison;
+           eq      : logic -> logic -> bool;
+           foldl   : 'a -> logic -> 'a;
+           foldr   : 'a -> logic -> 'a;
+           gmap    : logic -> logic;
+           html    : logic -> HTML.viewer;
+           show    : logic -> string >)
+        GT.t
+
+      (** A type synonym for injected rational *)
+      type groundi = (ground, logic) injected
+
+      (** [to_logic x] makes logic rational from ground one *)
+      val to_logic : ground -> logic
+
+      (** [from_logic x] makes ground rational from logic one.
+          Raises exception [Not_a_value] if [x] contains logic variables.*)
+      val from_logic : logic -> ground
+
+      (** Make injected rational from ground one *)
+      val inj : ground -> groundi
+
+      (** Constructs injected rational from two nats.
+          Numerator and denominator equal to 1 by default *)
+      val fraction : ?num:Nat.groundi -> ?denom:Nat.groundi -> groundi
+
+      val numo   : groundi -> Nat.groundi -> goal
+      val denomo : groundi -> Nat.groundi -> goal
+
+      (** Relational addition *)
+      val addo  : groundi -> groundi -> groundi -> goal
+
+      (** Infix syninym for [addo] *)
+      val ( + ) : groundi -> groundi -> groundi -> goal
+
+      (** Relational multiplication *)
+      val mulo  : groundi -> groundi -> groundi -> goal
+
+      (** Infix syninym for [mulo] *)
+      val ( * ) : groundi -> groundi -> groundi -> goal
+
+      (** Comparisons *)
+      val eqo : groundi -> groundi -> Bool.groundi -> goal
+      val leo : groundi -> groundi -> Bool.groundi -> goal
+      val geo : groundi -> groundi -> Bool.groundi -> goal
+      val gto : groundi -> groundi -> Bool.groundi -> goal
+      val lto : groundi -> groundi -> Bool.groundi -> goal
+
+      (** Comparisons as goals *)
+      val (%=) : groundi -> groundi -> goal
+      val (<=) : groundi -> groundi -> goal
+      val (>=) : groundi -> groundi -> goal
+      val (>)  : groundi -> groundi -> goal
+      val (<)  : groundi -> groundi -> goal
+    end
 
 (** {3 Relational Lists} *)
 module List :
@@ -759,6 +848,11 @@ module List :
     val tlo   : ('a, 'b) groundi -> ('a, 'b) groundi -> goal
 
   end
+
+(** [inj_nat n] is a deforested synonym for injection *)
+val inj_nat : int -> Nat.groundi
+
+val (%%) : int -> int -> Rational.groundi
 
 (** [inj_list inj_a l] is a deforested synonym for injection *)
 val inj_list : ('a -> ('a, 'b) injected) -> 'a list -> ('a, 'b) List.groundi

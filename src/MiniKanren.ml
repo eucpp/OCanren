@@ -1097,7 +1097,10 @@ end;;
 
 (* ***************************** a la relational StdLib here ***************  *)
 @type ('a, 'l) llist = Nil | Cons of 'a * 'l with show, gmap, html, eq, compare, foldl, foldr;;
+
 @type 'a lnat = O | S of 'a with show, html, eq, compare, foldl, foldr, gmap;;
+
+@type 'a lrational = { num : 'a; denom : 'a } with show, html, eq, compare, foldl, foldr, gmap;;
 
 let none () = inj@@lift None
 let some x  = inj@@lift (Some x)
@@ -1259,6 +1262,7 @@ module Nat = struct
 
     let zero = o
     let succ = s
+    let one  = s o
 
     let rec addo x y z =
       conde [
@@ -1315,9 +1319,146 @@ module Nat = struct
 
   end
 
-let rec inj_nat n =
-  if n <= 0 then inj O
-  else inj  (S (inj_nat @@ n-1))
+  module Rational = struct
+      type 'a logic' = 'a logic
+
+      let logic' = logic
+
+      module X = struct
+        type 'a t = 'a lrational
+        let fmap f { num; denom } = { num = f num; denom = f denom }
+      end
+      include X
+      module F = Fmap1(X)
+
+      type ground = Nat.ground t
+      type logic = Nat.logic t logic'
+      type groundi = (ground, logic) injected
+
+      let rec reify : helper -> (ground, logic) injected -> logic  = fun c x ->
+        if c#isVar x then var_of_injected_exn c x reify
+        else F.reify Nat.reify c x
+
+      let ground = {
+        GT.gcata = ();
+        GT.plugins =
+          object(this)
+            method html    n = GT.html   (lrational) (GT.html(Nat.ground))    n
+            method eq      n = GT.eq     (lrational) (GT.eq(Nat.ground))      n
+            method compare n = GT.compare(lrational) (GT.compare(Nat.ground)) n
+            method foldr   n = GT.foldr  (lrational) (GT.foldr(Nat.ground))   n
+            method foldl   n = GT.foldl  (lrational) (GT.foldl(Nat.ground))   n
+            method gmap    n = GT.gmap   (lrational) (GT.gmap(Nat.ground))    n
+            method show    n = GT.show   (lrational) (GT.show(Nat.ground))    n
+          end
+      }
+
+      let logic = {
+        GT.gcata = ();
+        GT.plugins =
+          object(this)
+            method html    n   = GT.html   (logic') (GT.html   (lrational) (GT.html   (Nat.logic))) n
+            method eq      n m = GT.eq     (logic') (GT.eq     (lrational) (GT.eq     (Nat.logic))) n m
+            method compare n m = GT.compare(logic') (GT.compare(lrational) (GT.compare(Nat.logic))) n m
+            method foldr   a n = GT.foldr  (logic') (GT.foldr  (lrational) (GT.foldr  (Nat.logic))) a n
+            method foldl   a n = GT.foldl  (logic') (GT.foldl  (lrational) (GT.foldl  (Nat.logic))) a n
+            method gmap    n   = GT.gmap   (logic') (GT.gmap   (lrational) (GT.gmap   (Nat.logic))) n
+            method show    n   = GT.show   (logic') (GT.show   (lrational) (GT.show   (Nat.logic))) n
+          end
+      }
+
+      let rec to_logic n = Value (GT.gmap(lrational) Nat.to_logic n)
+
+      let from_logic' = from_logic
+
+      let rec from_logic x = GT.gmap(lrational) (Nat.from_logic) @@ from_logic' x
+
+      let inj' = inj
+
+      let rec inj r = inj' @@ F.distrib @@ X.fmap Nat.inj r
+
+      let fraction ?(num=Nat.one) ?(denom=Nat.one) = !! { num; denom }
+
+      let numo   r num   = call_fresh (fun denom -> r === fraction ~num ~denom)
+      let denomo r denom = call_fresh (fun num   -> r === fraction ~num ~denom)
+
+      let addo x y z =
+        Fresh.four (fun a b c d ->
+          (x === fraction ~num:a ~denom:b) &&&
+          (y === fraction ~num:c ~denom:d) &&&
+          Fresh.four (fun e f u v ->
+            (Nat.mulo a d u) &&&
+            (Nat.mulo b c v) &&&
+            (Nat.addo u v e) &&&
+            (Nat.mulo b d f) &&&
+            (z === fraction ~num:e ~denom:f)
+          )
+        )
+
+      let (+) = addo
+
+      let mulo x y z =
+        Fresh.four (fun a b c d ->
+          (x === fraction ~num:a ~denom:b) &&&
+          (y === fraction ~num:c ~denom:d) &&&
+          Fresh.two (fun e f ->
+            (Nat.mulo a c e) &&&
+            (Nat.mulo b d f) &&&
+            (z === fraction ~num:e ~denom:f)
+          )
+        )
+
+      let ( * ) = mulo
+
+      let eqo x y f =
+        Fresh.four (fun a b c d ->
+          (x === fraction ~num:a ~denom:b) &&&
+          (y === fraction ~num:c ~denom:d) &&&
+          Fresh.two (fun u v ->
+            (Nat.mulo a d u) &&&
+            (Nat.mulo b c v) &&&
+            conde [
+              (u === v) &&& (f === !!true );
+              (u =/= v) &&& (f === !!false);
+            ]
+          )
+        )
+
+      let (%=) x y = eqo x y Bool.true_
+
+      let leo x y f =
+        Fresh.four (fun a b c d ->
+          (x === fraction ~num:a ~denom:b) &&&
+          (y === fraction ~num:c ~denom:d) &&&
+          Fresh.two (fun u v ->
+            (Nat.mulo a d u) &&&
+            (Nat.mulo b c v) &&&
+            (Nat.leo u v f)
+          )
+        )
+
+      let geo x y b = leo y x b
+
+      let (<=) x y = leo x y Bool.true_
+      let (>=) x y = geo x y Bool.false_
+
+      let gto x y f =
+        Fresh.four (fun a b c d ->
+          (x === fraction ~num:a ~denom:b) &&&
+          (y === fraction ~num:c ~denom:d) &&&
+          Fresh.two (fun u v ->
+            (Nat.mulo a d u) &&&
+            (Nat.mulo b c v) &&&
+            (Nat.gto u v f)
+          )
+        )
+
+      let lto x y b = gto y x b
+
+      let (>) x y = gto x y Bool.true_
+      let (<) x y = lto x y Bool.true_
+
+    end
 
 module List =
   struct
@@ -1539,6 +1680,13 @@ let (%)  = List.cons
 let (%<) = List.(%<)
 let (!<) = List.(!<)
 let nil  = List.nil
+
+let rec inj_nat n =
+  if n <= 0 then inj O
+  else inj (S (inj_nat @@ n-1))
+
+(* let inj_rational ?(num=1) ?(denom=1) = Rational.fraction ~num=(inj_nat num) ~denom=(inj_nat denom) *)
+let (%%) n d = Rational.fraction ~num:(inj_nat n) ~denom:(inj_nat d)
 
 let rec inj_list: ('a -> (('a, 'b) injected)) -> 'a list -> ('a, 'b) List.groundi =
   fun f -> function

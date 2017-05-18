@@ -3,6 +3,7 @@ open MiniKanren
 open Tester
 
 let show_nat        = GT.show(Nat.ground)
+let show_rational   = GT.show(Rational.ground)
 let show_bool       = GT.show(Bool.ground)
 
 let show_nat_llist  = GT.show(List.ground) (GT.show(Nat.ground))
@@ -36,6 +37,18 @@ let () =
   run_exn show_nat         1    q  qh (REPR (fun q     -> Nat.mulo ?$3 ?$0 q                             ));
   run_exn show_nat         1    q  qh (REPR (fun q     -> Nat.mulo q   ?$5 ?$0                           ));
   run_exn show_nat         3    q  qh (REPR (fun q     -> Nat.mulo q   ?$0 ?$0                           ))
+
+let () =
+  run_exn show_rational    1    q  qh (REPR (fun q     -> Rational.addo (1 %% 2) (1 %% 4) q              ));
+  run_exn show_rational    1    q  qh (REPR (fun q     -> Rational.mulo (1 %% 2) (1 %% 4) q              ));
+  run_exn show_bool        1    q  qh (REPR (fun q     -> Rational.eqo  (1 %% 2) (2 %% 4) q              ));
+  run_exn show_bool        1    q  qh (REPR (fun q     -> Rational.eqo  (1 %% 3) (2 %% 4) q              ));
+  run_exn show_bool        1    q  qh (REPR (fun q     -> Rational.leo  (1 %% 2) (1 %% 2) q              ));
+  run_exn show_bool        1    q  qh (REPR (fun q     -> Rational.leo  (1 %% 2) (3 %% 4) q              ));
+  run_exn show_bool        1    q  qh (REPR (fun q     -> Rational.lto  (1 %% 2) (1 %% 2) q              ));
+  run_exn show_bool        1    q  qh (REPR (fun q     -> Rational.lto  (1 %% 3) (1 %% 2) q              ));
+  run_exn show_bool        1    q  qh (REPR (fun q     -> Rational.lto  (5 %% 6) (3 %% 4) q              ))
+
 
 let () =
   run_exn show_nat         1    q  qh (REPR (fun q     -> sumo (nats []) q                               ));
