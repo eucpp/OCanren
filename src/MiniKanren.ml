@@ -18,10 +18,50 @@
 
 open Printf
 
+module Cache :
+  sig
+    type t
+    type iter
+
+    val create : unit -> t
+
+    val fold : ('a -> Obj.t -> 'a) -> 'a -> t -> 'a
+    val consume  : t -> iter -> Obj.t * iter
+    val add : t -> Obj.t -> unit
+
+    val start_iter : t -> iter
+    val end_iter   : t -> iter
+    val equal_iter : iter -> iter -> bool
+  end =
+  struct
+    type t = Obj.t list ref
+    type iter = Obj.t list
+
+    let create () = ref []
+
+    let fold f acc cache =
+      List.fold_left f acc !cache
+
+    let consume cache it = (List.hd it, List.tl it)
+
+    let add cache x =
+      cache := List.cons x !cache
+
+    let start_iter cache = !cache
+    let end_iter _ = []
+    let equal_iter = (==)
+  end
+
 module Stream =
   struct
 
-    type 'a t = Nil | Cons of 'a * 'a t | Lazy of 'a t Lazy.t
+    type 'a t =
+      | Nil
+      | Cons of 'a * 'a t
+      | Lazy of 'a t Lazy.t
+      | Waiting of 'a suspended list
+    and 'a suspended =
+      {cache: Cache.t; seen : Cache.iter; thunk: 'a t Lazy.t}
 
     let from_fun (f: unit -> 'a t) : 'a t = Lazy (Lazy.from_fun f)
 
@@ -29,46 +69,95 @@ module Stream =
 
     let cons h t = Cons (h, t)
 
-    let rec is_empty = function
-    | Nil    -> true
-    | Lazy s -> is_empty @@ Lazy.force s
-    | _      -> false
+    let make_waiting cache f =
+      let seen  = Cache.start_iter cache in
+      let thunk = Lazy.from_fun (fun () -> f (Cache.start_iter cache) seen) in
+      Waiting [{cache; seen; thunk}]
 
-    let rec retrieve ?(n=(-1)) s =
-      if n = 0
-      then [], s
-      else match s with
-          | Nil          -> [], s
-          | Cons (x, xs) -> let xs', s' = retrieve ~n:(n-1) xs in x::xs', s'
-          | Lazy  z      -> retrieve ~n (Lazy.force z)
-
-    let take ?(n=(-1)) s = fst @@ retrieve ~n s
-
-    let hd s = List.hd @@ take ~n:1 s
-    let tl s = snd @@ retrieve ~n:1 s
+    let map_suspended f ss =
+      let f' ({thunk=z;_} as s) =
+        {s with thunk = Lazy.from_fun (fun () -> f (Lazy.force z))}
+      in
+      List.map f' ss
 
     let rec mplus fs gs =
       match fs with
       | Nil           -> gs
       | Cons (hd, tl) -> cons hd @@ from_fun (fun () -> mplus gs tl)
-      | Lazy z        -> from_fun (fun () -> mplus gs (Lazy.force z) )
+      | Lazy z        -> from_fun (fun () -> mplus gs (Lazy.force z))
+      (* handling waiting streams is tricky *)
+      | Waiting ss    -> (match unwrap_suspended ss, gs with
+        (* if [fs] hasn't unseen cached answers and [gs] is also a waiting stream then we merge them  *)
+        | Waiting ss, Waiting ss' -> Waiting (ss @ ss')
+        (* if [fs] hasn't unseen cached answers but [gs] is not a waiting stream then we swap them,
+           pushing waiting stream to the back of the new stream *)
+        | Waiting ss, _           -> mplus gs @@ Lazy (Lazy.from_fun (fun () -> fs))
+        (* if [fs] has unseen cached answers then [fs'] contains lazy stream ready to produce theese answers *)
+        | fs', _                  -> mplus fs' gs)
+    and unwrap_suspended ss =
+      let has_unseen {cache=cache; seen=seen; _} =
+        not @@ Cache.equal_iter (Cache.start_iter cache) seen
+      in
+      let rec find_unseen prefix = function
+        | ({thunk=f; _} as s)::ss ->
+          if has_unseen s then (Some (Lazy f), (List.rev prefix) @ ss) else find_unseen (s::prefix) ss
+        | [] -> (None, List.rev prefix)
+      in
+      match find_unseen [] ss with
+        | Some s, [] -> s
+        | Some s, ss -> mplus s @@ Waiting ss
+        | None  , ss -> Waiting ss
 
     let rec bind xs f =
       match xs with
       | Cons (x, xs) -> from_fun (fun () -> mplus (f x) (bind xs f))
       | Nil          -> nil
       | Lazy z       -> from_fun (fun () -> bind (Lazy.force z) f)
+      | Waiting ss   -> match unwrap_suspended ss with
+        | Waiting ss ->
+          let ss' = map_suspended (fun s -> bind s f) ss in
+          Waiting ss'
+        | xs' -> bind xs' f
 
+    let rec is_empty = function
+    | Nil         -> true
+    | Lazy s      -> is_empty @@ Lazy.force s
+    | Waiting ss  -> (match unwrap_suspended ss with
+        | Waiting _ -> true
+        | _         -> false
+      )
+    | _           -> false
+
+    let rec retrieve ?(n=(-1)) s =
+      if n = 0
+      then [], s
+      else match s with
+        | Nil          -> [], s
+        | Cons (x, xs) -> let xs', s' = retrieve ~n:(n-1) xs in x::xs', s'
+        | Lazy  z      -> retrieve ~n (Lazy.force z)
+        | Waiting ss   -> (match unwrap_suspended ss with
+          | Waiting ss -> [], s
+          | s'         -> retrieve ~n s')
+
+    let take ?(n=(-1)) s = fst @@ retrieve ~n s
+
+    let hd s = List.hd @@ take ~n:1 s
+    let tl s = snd @@ retrieve ~n:1 s
 
     let rec map f = function
     | Nil          -> Nil
     | Cons (x, xs) -> Cons (f x, map f xs)
     | Lazy s       -> Lazy (Lazy.from_fun (fun () -> map f @@ Lazy.force s))
+    | Waiting ss   -> Waiting (map_suspended (map f) ss)
 
     let rec iter f = function
     | Nil          -> ()
     | Cons (x, xs) -> f x; iter f xs
     | Lazy s       -> iter f @@ Lazy.force s
+    | Waiting ss   -> (match unwrap_suspended ss with
+      | Waiting ss -> ()
+      | s -> iter f s
+      )
 
     let rec zip fs gs =
       match (fs, gs) with
@@ -76,7 +165,16 @@ module Stream =
       | Cons (x, xs), Cons (y, ys) -> Cons ((x, y), zip xs ys)
       | _           , Lazy s       -> Lazy (Lazy.from_fun (fun () -> zip fs (Lazy.force s)))
       | Lazy s      , _            -> Lazy (Lazy.from_fun (fun () -> zip (Lazy.force s) gs))
+      | Waiting ss, Waiting ss'    -> zip_waiting (unwrap_suspended ss) (unwrap_suspended ss')
+      | Waiting ss, _              -> zip_waiting (unwrap_suspended ss) gs
+      | _, Waiting ss              -> zip_waiting fs (unwrap_suspended ss)
       | Nil, _      | _, Nil       -> failwith "MiniKanren.Stream.zip: streams have different lengths"
+    and zip_waiting fs gs =
+      match (fs, gs) with
+      | Waiting ss, Waiting ss' -> Nil
+      | Waiting ss, _           -> failwith "MiniKanren.Stream.zip: streams have different lengths"
+      | _, Waiting ss           -> failwith "MiniKanren.Stream.zip: streams have different lengths"
+      | _, _                    -> zip fs gs
 
   end
 
@@ -145,7 +243,7 @@ type token_mk = int list
 let global_token: token_mk = [8];;
 
 type inner_logic =
-| InnerVar of token_mk * token_env * int * Obj.t list
+| InnerVar of token_mk * token_env * int
 
 let (!!!) = Obj.magic
 
@@ -232,14 +330,17 @@ end = struct
   let replace: key -> 'a list -> 'a t -> 'a t = M.add
 end
 
+exception External_variable of int
+
 module Env :
   sig
     type t
 
-    val empty  : unit -> t
-    val fresh  : t -> 'a * t
-    val var    : t -> 'a -> int option
-    val is_var : t -> 'a -> bool
+    val empty    : unit -> t
+    val reset    : t -> t
+    val fresh    : t -> 'a
+    val var      : t -> 'a -> int option
+    val is_var   : t -> 'a -> bool
   end =
   struct
     type t = { token : token_env;
@@ -248,23 +349,26 @@ module Env :
               }
 
     let last_token : token_env ref = ref 0
+
     let empty () =
       incr last_token;
-      { token= !last_token; next=10 }
+      { token = !last_token; next = 10 }
+
+    let reset env = { env with next = 10 }
 
     let fresh e =
-      let v = InnerVar (global_token, e.token, e.next, []) in
+      let v = InnerVar (global_token, e.token, e.next) in
       e.next <- 1+e.next;
       (* printf "new fresh var with index=%d\n" e.next; *)
-      (!!!v, e)
+      !!!v
 
     let var_tag, var_size =
       let dummy_index = 0 in
       let dummy_token = 0 in
-      let v = InnerVar (global_token, dummy_token, dummy_index, []) in
+      let v = InnerVar (global_token, dummy_token, dummy_index) in
       Obj.tag (!!! v), Obj.size (!!! v)
 
-    let var {token=env_token;_} x =
+    let var {token=env_token; next=n} x =
       (* There we detect if x is a logic variable and then that it belongs to current env *)
       let t = !!! x in
       if Obj.tag  t = var_tag  &&
@@ -273,9 +377,11 @@ module Env :
           (Obj.is_block q) && q == (!!!global_token)
          )
       then (let q = Obj.field t 1 in
-            if (Obj.is_int q) && q == (!!!env_token)
-            then let InnerVar (_,_,i,_) = !!! x in Some i
-            else failwith "You hacked everything and pass logic variables into wrong environment"
+            if (Obj.is_int q) (*&& q == (!!!env_token)*) then
+              let InnerVar (_,_,i) = Obj.magic x in
+              Some i
+            else
+              failwith "You hacked everything and pass logic variables into wrong environment"
             )
       else None
 
@@ -311,6 +417,8 @@ module Subst :
     val split   : t -> Obj.t list * Obj.t list
     val walk    : Env.t -> 'a -> t -> 'a
     val unify   : Env.t -> 'a -> 'a -> t option -> (int * content) list * t option
+    (* Unsafe extension of substitution *)
+    val extend  : Env.t -> 'a -> 'a -> t -> t
     val show    : t -> string
   end =
   struct
@@ -360,6 +468,14 @@ module Subst :
             in
             inner 0
 
+    let extend env x term subst =
+      let _ = print_endline @@ generic_show env in
+      match Env.var env x with
+      | Some xi ->
+        let cnt = make_content x term in
+        M.add xi cnt subst
+      | None -> invalid_arg "Logic variable expected as argument to extend"
+
     let unify env x y subst =
       let extend xi x term delta subst =
         if occurs env xi term subst then raise Occurs_check
@@ -402,58 +518,93 @@ module Subst :
 
   end
 
-module State =
-  struct
-    type t = Env.t * Subst.t * Subst.t list
-    let empty () = (Env.empty (), Subst.empty, [])
-    let env   (env, _, _) = env
-    let show  (env, subst, constr) = sprintf "st {%s, %s}" (Subst.show subst) (GT.show(GT.list) Subst.show constr)
-  end
+let rec refine : Env.t -> Subst.t -> Obj.t -> Obj.t = fun env subst x ->
+  let rec walk' term =
+    let var = Subst.walk env term subst in
+    match Env.var env var with
+    | None ->
+        (match wrap (Obj.repr var) with
+          | Unboxed _ -> Obj.repr var
+          | Boxed (tag, sz, f) ->
+            let copy = Obj.dup (Obj.repr var) in (* not a shallow copy *)
+            let sf =
+              if tag = Obj.double_array_tag
+              then !!! Obj.set_double_field
+              else Obj.set_field
+            in
+            for i = 0 to sz-1 do
+              sf copy i @@ walk' (!!!(f i))
+            done;
+            copy
+          | Invalid n -> invalid_arg (sprintf "Invalid value for reconstruction (%d)" n)
+        )
+    | Some _ -> var
+  in
+  walk' x
 
-type 'a goal' = State.t -> 'a
-type goal = State.t Stream.t goal'
-
-let call_fresh f (env, subst, constr)  =
-  let x, env' = Env.fresh env in
-  f x (env', subst, constr)
+let rec refresh : Env.t -> Subst.t -> Obj.t -> Obj.t = fun env subst x ->
+  let tbl = Hashtbl.create 31 in
+  let rec walk' term =
+    let var = Subst.walk env term subst in
+      (match Env.var env var with
+      | None ->
+          (match wrap (Obj.repr var) with
+            | Unboxed _ -> Obj.repr var
+            | Boxed (tag, sz, f) ->
+              let copy = Obj.dup (Obj.repr var) in (* not a shallow copy *)
+              let sf =
+                if tag = Obj.double_array_tag
+                then !!! Obj.set_double_field
+                else Obj.set_field
+              in
+              let rec walk_obj i =
+                if i < sz then
+                  let new_field = walk' (!!!(f i)) in
+                  sf copy i new_field;
+                  walk_obj (i+1)
+                else
+                  ()
+              in
+              let subst' = walk_obj 0 in
+              copy
+            | Invalid n -> invalid_arg (sprintf "Invalid value for refreshing (%d)" n)
+          )
+      | Some _ -> begin
+        try
+          Hashtbl.find tbl var
+        with Not_found ->
+          let fresh_var = Env.fresh env in
+          Hashtbl.add tbl var fresh_var;
+          Obj.repr fresh_var
+        end
+    )
+  in
+  walk' x
 
 exception Disequality_violated
 
-let (===) (x: _ injected) y (env, subst, constr) =
-  (* we should always unify two injected types *)
+module Constraints : sig
+  type t
+  val empty: t
+  val show: t -> string
 
-  try
-    let prefix, subst' = Subst.unify env x y (Some subst) in
-    begin match subst' with
-    | None -> Stream.nil
-    | Some s ->
-        try
-          (* TODO: only apply constraints with the relevant vars *)
-          let constr' =
-            List.fold_left (fun css' cs ->
-              let x,t = Subst.split cs in
-              try
-                let p, s' = Subst.unify env (!!!x) (!!!t) subst' in
-                match s' with
-                | None -> css'
-                | Some _ ->
-                    match p with
-                    | [] -> raise Disequality_violated
-                    | _  -> (Subst.of_list p)::css'
-              with Occurs_check -> css'
-            )
-            []
-            constr
-            in
-          Stream.cons (env, s, constr') Stream.nil
-        with Disequality_violated -> Stream.nil
-    end
-  with Occurs_check -> Stream.nil
+  (** [refine env c x] refines [x] and maybe changes constraints [c].
+    It returns a list of term that [x] should not be equal
+   *)
+  val refine: Env.t -> Subst.t -> t -> Obj.t -> Obj.t list
 
-let (=/=) x y ((env, subst, constr) as st) =
-  let normalize_store prefix constr =
+  val extend : prefix:(int * Subst.content) list -> Env.t -> t -> t
+
+  val check  : prefix:(int * Subst.content) list -> Env.t -> Subst.t option -> t -> t
+end = struct
+  type t = Subst.t list
+
+  let empty = []
+
+  let normalize_store ~prefix env constr =
     let subst  = Subst.of_list prefix in
-    let prefix = List.split (List.map Subst.(fun (_, {lvar;new_val}) -> (lvar, new_val)) prefix) in
+    let open Subst in
+    let prefix = List.split @@ List.map (fun (_, {lvar;new_val}) -> (lvar, new_val)) prefix in
     let subsumes subst (vs, ts) =
       try
         match Subst.unify env !!!vs !!!ts (Some subst) with
@@ -471,16 +622,87 @@ let (=/=) x y ((env, subst, constr) as st) =
              else c :: traverse cs
     in
     traverse constr
-  in
+
+  let extend ~prefix env cs : t = normalize_store ~prefix env cs
+
+  let refine_in_subst = refine
+
+  let refine_everywhere env x sub1 sub2 =
+    (* we make a long walk in two substitutions *)
+    let rec helper prev_is_ok cur_sub prev_sub term =
+      let dest = refine_in_subst env cur_sub term in
+      match (dest = term), prev_is_ok with
+      | true, true  -> dest
+      | true, false -> helper true  prev_sub cur_sub term
+      | false, _    -> helper false prev_sub cur_sub dest
+    in
+    helper false sub1 sub2 x
+
+  let refine env base_subs c term =
+    ListLabels.fold_left ~init:[] ~f:(fun acc csubst ->
+        let dest = refine_everywhere env term base_subs csubst in
+        if dest == term then acc
+        else dest :: acc
+      ) c
+
+  let check ~prefix env subst' cstr =
+    ListLabels.fold_left cstr ~init:[] ~f:(fun css' cs_sub ->
+      let x,t = Subst.split cs_sub in
+      try
+        let p, s' = Subst.unify env (!!!x) (!!!t) subst' in
+        match s' with
+        | None -> css'
+        | Some _ ->
+            match p with
+            | [] -> raise Disequality_violated
+            | _  -> (Subst.of_list p)::css'
+      with Occurs_check -> css'
+    )
+
+  let show c = GT.show(GT.list) Subst.show c
+end
+
+module State =
+  struct
+    type t = Env.t * Subst.t * Constraints.t
+    let empty () = (Env.empty (), Subst.empty, Constraints.empty)
+    let env   (env, _, _) = env
+    let show  (env, subst, constr) = sprintf "st {%s, %s}" (Subst.show subst) (Constraints.show constr)
+  end
+
+type 'a goal' = State.t -> 'a
+type goal = State.t Stream.t goal'
+
+let call_fresh f (env, subst, constr)  =
+  let x = Env.fresh env in
+  f x (env, subst, constr)
+
+let (===) (x: _ injected) y (env, subst, constr) =
+  (* we should always unify two injected types *)
+
   try
     let prefix, subst' = Subst.unify env x y (Some subst) in
+    begin match subst' with
+    | None -> Stream.nil
+    | (Some s) as subst ->
+        try
+          let constr' = Constraints.check ~prefix env subst constr in
+          Stream.cons (env, s, constr') Stream.nil
+        with Disequality_violated -> Stream.nil
+    end
+  with Occurs_check -> Stream.nil
+
+let (=/=) x y ((env, subst, constrs) as st) =
+  try
+    let prefix, subst' = Subst.unify env x y (Some subst) in
+    (* prefix is a delta between subst and subst' *)
     match subst' with
     | None -> Stream.cons st Stream.nil
     | Some s ->
         (match prefix with
         | [] -> Stream.nil
         | _  ->
-          let new_constrs = normalize_store prefix constr in
+          let new_constrs = Constraints.extend ~prefix env constrs in
           Stream.cons (env, subst, new_constrs) Stream.nil
         )
   with Occurs_check -> Stream.cons st Stream.nil
@@ -543,45 +765,6 @@ let has_free_vars is_var x =
 
 exception WithFreeVars of (Obj.t -> bool) * Obj.t
 
-let rec refine : State.t -> ('a,'b) injected -> ('a,'b) injected = fun ((e, s, c) as st) x ->
-  let rec walk' recursive env var subst =
-    let var = Subst.walk env var subst in
-    match Env.var env var with
-    | None ->
-        (match wrap (Obj.repr var) with
-         | Unboxed _ -> !!!var
-         | Boxed (t, s, f) ->
-            let var = Obj.dup (Obj.repr var) in
-            let sf =
-              if t = Obj.double_array_tag
-              then !!! Obj.set_double_field
-              else Obj.set_field
-            in
-            for i = 0 to s - 1 do
-              sf var i (!!!(walk' true env (!!!(f i)) subst))
-           done;
-           !!!var
-         | Invalid n -> invalid_arg (sprintf "Invalid value for reconstruction (%d)" n)
-        )
-    | Some i when recursive ->
-        (match var with
-        | InnerVar (token1, token2, i, _) ->
-            (* We do not add extra Value here: they will be added on manual reification stage *)
-            let cs =
-              List.fold_left (fun acc s ->
-                match walk' false env (!!!var) s with
-                | maybeVar when Some i = Env.var env maybeVar -> acc
-                | t -> (!!!(refine st !!!t)) :: acc
-                )
-                []
-                c
-            in
-            Obj.magic @@ InnerVar (token1, token2, i, cs)
-        )
-    | _ -> var
-  in
-  !!!(walk' true e (!!!x) s)
-
 module ExtractDeepest =
   struct
     let ext2 x = x
@@ -592,7 +775,7 @@ module ExtractDeepest =
   end
 
 
-type helper = < isVar : 'a . 'a -> bool >
+type helper = < isVar : 'a . 'a -> bool; walk_cstrs: Obj.t -> Obj.t list >
 
 class type ['a,'b] refined = object
   method is_open: bool
@@ -600,10 +783,13 @@ class type ['a,'b] refined = object
   method refine: (helper -> ('a, 'b) injected -> 'b) -> inj:('a -> 'b) -> 'b
 end
 
-let make_rr : ('a, 'b) injected -> State.t -> ('a, 'b) refined = fun x st ->
-  let ans = refine st x in
-  let is_open = has_free_vars (Env.is_var @@ State.env st) (Obj.repr ans) in
-  let c: helper = !!!(object method isVar x = Env.is_var (State.env st) (Obj.repr x) end) in
+let make_rr : ('a, 'b) injected -> State.t -> ('a, 'b) refined = fun x ((env, s, cs) as st) ->
+  let ans = !!!(refine env s (Obj.repr x)) in
+  let is_open = has_free_vars (Env.is_var env) (Obj.repr ans) in
+  let c: helper = !!!(object
+      method isVar y = Env.is_var (State.env st) (Obj.repr y)
+      method walk_cstrs = Constraints.refine env s cs
+    end) in
   object(self)
     method is_open = is_open
     method prj = if self#is_open then raise Not_a_value else !!!ans
@@ -665,24 +851,22 @@ module LogicAdder :
       call_fresh (fun logic st -> (R.refiner logic, prev (f logic) st))
   end
 
-let one () = (fun x -> LogicAdder.(succ zero) x), (@@), ApplyLatest.two
 
 let succ n () =
   let adder, currier, app = n () in
   (LogicAdder.succ adder, Uncurry.succ currier, ApplyLatest.succ app)
 
-let succ = (*!!!*)succ
-let one = (*!!!*)one
+let one   () = (fun x -> LogicAdder.(succ zero) x), (@@), ApplyLatest.two
 let two   () = succ one   ()
 let three () = succ two   ()
 let four  () = succ three ()
 let five  () = succ four  ()
 
-let q     = (*!!!*)one
-let qr    = (*!!!*)two
-let qrs   = (*!!!*)three
-let qrst  = (*!!!*)four
-let pqrst = (*!!!*)five
+let q     = one
+let qr    = two
+let qrs   = three
+let qrst  = four
+let pqrst = five
 
 let run n goalish f =
   let adder, currier, app_num = n () in
@@ -691,6 +875,78 @@ let run n goalish f =
 
 let delay : (unit -> goal) -> goal = fun g ->
   fun st -> Stream.from_fun (fun () -> g () st)
+
+(** ************************************************************************* *)
+(** Tabling primitives                                                        *)
+
+let slave_call argv cache ((env, subst, constr) as st) =
+  let rec consume it seen =
+    if Cache.equal_iter it seen then
+      Stream.make_waiting cache consume
+    else
+      let x, it' = Cache.consume cache it in
+      let answ = refresh env subst x in
+      (* printf "consume from cache %s\n" (generic_show answ); *)
+      match snd @@ Subst.unify env argv answ (Some subst) with
+        | Some s -> Stream.cons (env, s, constr) (consume it' seen)
+        | None   -> failwith "Cannot unify cached term with argument term"
+  in
+  consume (Cache.start_iter cache) (Cache.end_iter cache)
+
+let tabling_hook argv cache ((env, subst, constr) as st) =
+  (* let empty_env = Env.empty () in *)
+  (* refine argv in current subst *)
+  let argv' = refine env subst argv in
+  (* rename all variables to 0 ... n *)
+  let argv'' = refresh (Env.empty ()) Subst.empty argv' in
+  let alpha_eq answ =
+    (* all variables in both terms are renamed to 0 ... n, *)
+    (* because of that simple equivalence test is enough *)
+    let answ'' = refresh (Env.empty ()) Subst.empty answ in
+    (* printf "alpha-eq? \n    %s\n    %s\n" (generic_show argv'') (generic_show answ''); *)
+    argv'' = answ''
+  in
+  (* let _ = printf "tabling_hook %s\n" (generic_show argv') in *)
+  let is_cached = Cache.fold (fun acc answ -> acc || alpha_eq answ) false cache in
+  (* printf "is_cached? %d\n" (if is_cached then 1 else 0); *)
+  if not is_cached then begin
+    Cache.add cache (refine env subst argv');
+    success st
+  end
+  else
+    failure ()
+
+type table = Env.t * ((Obj.t, Cache.t) Hashtbl.t)
+
+let make_table () = (Env.empty (), Hashtbl.create 1031)
+
+let tabled (empty_env, tbl) goal args_list ((env, subst, constr) as st) =
+  let argv = refine env subst args_list in
+  let key  = refresh (Env.reset empty_env) Subst.empty argv in
+  try
+    let cache = Hashtbl.find tbl key in
+    (* printf "slave call %s\n" (generic_show key); *)
+    slave_call argv cache st
+  with Not_found ->
+    let cache = Cache.create () in
+    (* printf "master call %s\n" (generic_show key); *)
+    Hashtbl.add tbl key cache;
+    ((goal ()) &&& (tabling_hook argv cache)) st
+
+let tabled1 tbl goal q =
+  tabled tbl (fun () -> goal q) @@ Obj.repr [Obj.repr q;]
+
+let tabled2 tbl goal q r =
+  tabled tbl (fun () -> goal q r) @@ Obj.repr [Obj.repr q; Obj.repr r]
+
+let tabled3 tbl goal q r s =
+  tabled tbl (fun () -> goal q r s) @@ Obj.repr [Obj.repr q; Obj.repr r; Obj.repr s]
+
+let tabled4 tbl goal q r s t =
+  tabled tbl (fun () -> goal q r s t) @@ Obj.repr [Obj.repr q; Obj.repr r; Obj.repr s; Obj.repr t]
+
+let tabled5 tbl goal p q r s t =
+  tabled tbl (fun () -> goal p q r s t) @@ Obj.repr [Obj.repr p; Obj.repr q; Obj.repr r; Obj.repr s; Obj.repr t]
 
 (* ************************************************************************** *)
 module type T1 = sig
@@ -720,7 +976,9 @@ end
 
 let var_of_injected_exn : helper -> ('a,'b) injected -> (helper -> ('a,'b) injected -> 'b) -> 'b = fun c x r ->
   if c#isVar x
-  then let InnerVar (_,_,n,cstr) = !!!x in !!!(Var (n, List.map (!!!(r c)) !!!cstr))
+  then
+    let InnerVar (_,_,n) = !!!x in
+    !!!(Var (n, List.map (!!!(r c)) @@ c#walk_cstrs !!!x))
   else failwith "Bad argument of var_of_injected: it should be logic variable"
 
 module Fmap1 (T : T1) = struct
