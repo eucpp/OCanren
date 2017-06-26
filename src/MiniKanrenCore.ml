@@ -1724,3 +1724,11 @@ let rec (?|) = fun xs st ->
   |> (fun g -> MKStream.inc (fun ()  -> g st))
 
 let conde = (?|)
+
+let negation g st =
+  let stream = g st in
+  (* if MKStream.is_empty stream then *)
+  if (Stream.is_empty @@ Stream.of_mkstream stream) then
+    MKStream.single st
+  else
+    MKStream.nil

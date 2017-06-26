@@ -220,6 +220,8 @@ val (?&) : goal list -> goal
 (** [compose] is a synonym for [?&] *)
 val compose : goal list -> goal
 
+val negation : goal -> goal
+
 (** {2 Some predefined goals} *)
 
 (** [success] always succeeds *)
