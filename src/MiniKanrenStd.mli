@@ -191,6 +191,7 @@ module Nat :
     val ( * ) : groundi -> groundi -> groundi -> goal
 
     (** Comparisons *)
+    val eqo : groundi -> groundi -> Bool.groundi -> goal
     val leo : groundi -> groundi -> Bool.groundi -> goal
     val geo : groundi -> groundi -> Bool.groundi -> goal
     val gto : groundi -> groundi -> Bool.groundi -> goal

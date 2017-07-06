@@ -238,11 +238,23 @@ module Nat = struct
 
     let ( * ) = mulo
 
+    let rec eqo x y b =
+      conde
+      [ (x === y) &&& (b === !!true)
+      ; Fresh.two (fun x' y' -> (b === !!false) &&& conde
+        [ (x === o) &&& (y === s y')
+        ; (y === o) &&& (x === s x')
+        ; (x === s x') &&& (y === s y') &&& (eqo x' y' !!false)
+        ])
+      ]
+
     let rec leo x y b =
-      conde [
-        (x === o) &&& (b === Bool.true_);
-        (x =/= o) &&& (y === o) &&& (b === Bool.false_);
-        Fresh.two (fun x' y' ->
+      conde
+      [ (x === o) &&& (b === Bool.true_)
+      ; Fresh.one (fun x' ->
+          (x === s x') &&& (y === o) &&& (b === Bool.false_)
+        )
+      ; Fresh.two (fun x' y' ->
           (x === (s x')) &&& (y === (s y')) &&& (leo x' y' b)
         )
       ]
@@ -253,8 +265,10 @@ module Nat = struct
     let (>=) x y = geo x y Bool.false_
 
     let rec gto x y b = conde
-      [ (x =/= o) &&& (y === o) &&& (b === Bool.true_)
-      ; (x === o) &&& (b === Bool.false_)
+      [ (x === o) &&& (b === Bool.false_)
+      ; Fresh.one (fun x' ->
+          (x === s x') &&& (y === o) &&& (b === Bool.true_)
+        )
       ; Fresh.two (fun x' y' ->
           (x === s x') &&& (y === s y') &&& (gto x' y' b)
         )
