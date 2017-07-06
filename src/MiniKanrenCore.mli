@@ -70,6 +70,8 @@ module Stream :
     (** [iter f s] iterates function [f] over the stream [s] *)
     val iter : ('a -> unit) -> 'a t -> unit
 
+    val filter : ('a -> bool) -> 'a t -> 'a t
+
     val zip : 'a t -> 'b t -> ('a * 'b) t
   end
 

@@ -313,6 +313,14 @@ module Stream =
     | Cons (x, xs) -> f x; iter f xs
     | Lazy s       -> iter f @@ Lazy.force s
 
+    let rec filter p = function
+    | Nil          -> Nil
+    | Cons (x, xs) ->
+      if p x
+      then Cons (x, filter p xs)
+      else filter p xs
+    | Lazy s       -> Lazy (Lazy.from_fun (fun () -> filter p @@ Lazy.force s))
+
     let rec zip fs gs =
       match (fs, gs) with
       | Nil         , Nil          -> Nil
