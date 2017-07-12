@@ -477,3 +477,75 @@ module Fmap6 (T : T6) :
   end
 
 val simple_reifier: helper -> ('a, 'a logic) injected -> 'a logic
+
+module Trace :
+  sig
+    type ('a, 'b) refiner
+
+    (** [trace n h x y z ...] refines arguments [x y z ...] in the current substitution,
+        passes these arguments to the handler [h] obtaining some side-effect,
+        and returns success goal.
+        The number of parameters is encoded using variadic machinery {a la} Danvy
+        and represented by a number of predefined numerals and successor function (see below).
+
+        Examples:
+
+          [project one (fun q -> printf "%s" q#prj) !!5 ] --- prints injected value
+     *)
+    val trace :
+      (unit -> (('t -> goal) -> 'a) * ('h -> 'e -> unit) * (State.t -> 'd -> 'e) * ('t -> 'd * State.t)) -> 'h -> 'a
+
+    val succ :
+      (unit -> (('a -> 'b) -> 'c) * ('d -> 'e -> 'f) * ('g -> 'h -> 'i) * ('j -> 'k * 'l)) ->
+      unit ->
+      (((State.t -> ('m, 'n) refined) * 'a -> 'b) -> 'm -> 'c) *
+      (('o -> 'd) -> 'o * 'e -> 'f) *
+      ('g -> ('g -> 'p) * 'h -> 'p * 'i) *
+      ('q * 'j -> ('q * 'k) * 'l)
+
+    val one : unit ->
+      ((('a, 'b) refiner * State.t -> goal) ->
+        ('a, 'b) injected -> goal) *
+      (('l -> 'm) -> 'l -> 'm) *
+      (State.t ->
+        ('a, 'b) refiner ->
+        ('a, 'b) refined) *
+      ('h -> 'h)
+
+    val two : unit ->
+      ((('a, 'b) refiner * (('c, 'd) refiner * State.t) -> goal) ->
+        ('a, 'b) injected -> ('c, 'd) injected -> goal) *
+      (('g -> 'h -> 'i) -> 'g * 'h -> 'i) *
+      (State.t ->
+        ('a, 'b) refiner * ('c, 'd) refiner ->
+        ('a, 'b) refined * ('c, 'd) refined) *
+      ('m * ('n * 'o) -> ('m * 'n) * 'o)
+
+    val three : unit ->
+      (((('a, 'b) refiner * (('c, 'd) refiner * (('e, 'f) refiner * State.t))) -> goal) ->
+         ('a, 'b) injected -> ('c, 'd) injected -> ('e, 'f) injected -> goal) *
+      (('i -> 'j -> 'k -> 'l) -> 'i * ('j * 'k) -> 'l) *
+      (State.t ->
+        ('a, 'b) refiner * (('c, 'd) refiner * ('e, 'f) refiner) ->
+        ('a, 'b) refined * (('c, 'd) refined * ('e, 'f) refined)) *
+      ('q * ('r * ('s * 't)) -> ('q * ('r * 's)) * 't)
+
+    val four : unit ->
+      (((('a, 'b) refiner * (('c, 'd) refiner * (('e, 'f) refiner * (('g, 'h) refiner * State.t)))) -> goal) ->
+         ('a, 'b) injected -> ('c, 'd) injected -> ('e, 'f) injected -> ('g, 'h) injected -> goal) *
+      (('i -> 'j -> 'k -> 'l -> 'm) -> 'i * ('j * ('k * 'l)) -> 'm) *
+      (State.t ->
+        ('a, 'b) refiner * (('c, 'd) refiner * (('e, 'f) refiner * ('g, 'h) refiner)) ->
+        ('a, 'b) refined * (('c, 'd) refined * (('e, 'f) refined * ('g, 'h) refined))) *
+      ('q * ('r * ('s * ('t * 'u))) -> ('q * ('r * ('s * 't))) * 'u)
+
+    val five : unit ->
+      (((('a, 'b) refiner * (('c, 'd) refiner * (('e, 'f) refiner * (('g, 'h) refiner * (('i, 'j) refiner * State.t))))) -> goal) ->
+         ('a, 'b) injected -> ('c, 'd) injected -> ('e, 'f) injected -> ('g, 'h) injected -> ('i, 'j) injected -> goal) *
+      (('k -> 'l -> 'm -> 'n -> 'o -> 'p) -> 'k * ('l * ('m * ('n * 'o))) -> 'p) *
+      (State.t ->
+        ('a, 'b) refiner * (('c, 'd) refiner * (('e, 'f) refiner * (('g, 'h) refiner * ('i, 'j) refiner))) ->
+        ('a, 'b) refined * (('c, 'd) refined * (('e, 'f) refined * (('g, 'h) refined * ('i, 'j) refined)))) *
+      ('q * ('r * ('s * ('t * ('u * 'v)))) -> ('q * ('r * ('s * ('t * 'u)))) * 'v)
+
+  end

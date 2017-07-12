@@ -425,11 +425,6 @@ let rec simple_reifier: helper -> ('a, 'a logic) injected -> 'a logic = fun c n 
 
 (** Importand part about reification and injected values finishes*)
 
-
-
-
-
-
 exception Not_a_value
 exception Occurs_check
 
@@ -1400,6 +1395,54 @@ let diseqtrace shower x y = fun st ->
   if MKStream.is_nil ans then printfn "  -"
   else  printfn "  +"; *)
   ans;;
+
+module Refiner =
+  struct
+    type ('a, 'b) refiner = State.t -> ('a, 'b) refined
+
+    let succ prev k x = prev (fun y -> k (make_rr x, y))
+
+    let zero k st = k st st
+  end
+
+module ApplyState =
+  struct
+    let one st r = r st
+
+    let succ prev = fun st (r, y) -> (r st, prev st y)
+  end
+
+module Trace =
+  struct
+    type ('a, 'b) refiner = State.t -> ('a, 'b) refined
+
+    let succ n () =
+      let refiner, uncurrier, app, ext = n () in
+      (Refiner.succ refiner, Uncurry.succ uncurrier, ApplyState.succ app, ExtractDeepest.succ ext)
+
+    (* let _:int = succ *)
+
+    let one () = (Refiner.(succ zero), (@@), ApplyState.one, ExtractDeepest.ext2)
+
+    let two   () = succ one ()
+    let three () = succ two ()
+    let four  () = succ three ()
+    let five  () = succ four ()
+
+    (* let _:int = three *)
+
+    let trace n callback =
+      let refiner, uncurrier, app, ext = n () in
+      let f tup st =
+        (uncurrier @@ callback) tup;
+        success st
+      in
+      refiner (
+        fun tup ->
+          let x, st = ext tup in
+          f (app st x)
+      )
+  end
 
 (* ***************************** a la relational StdLib here ***************  *)
 
