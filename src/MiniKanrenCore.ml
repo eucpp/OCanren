@@ -1101,6 +1101,49 @@ end*)
 (* module Constraints = DefaultConstraints *)
 module Constraints = FastConstraints
 
+module LogEntry : sig
+  type t
+
+  val empty   : unit -> t
+  val make    : string -> t -> t
+  val id      : t -> int
+  val content : t -> string
+end = struct
+
+  type t =
+    { id        : int
+    ; content   : string
+    ; parent    : t option
+    ; children  : t list ref
+    ; lastId    : int ref
+    }
+
+  let empty () =
+    { id        = 0
+    ; content   = "root"
+    ; parent    = None
+    ; children  = ref []
+    ; lastId    = ref 0
+    }
+
+  let make str ({lastId; children} as p) =
+    incr lastId;
+    let entry =
+    { id        = !lastId
+    ; content   = str
+    ; parent    = Some p
+    ; children  = ref []
+    ; lastId    = lastId
+    } in
+    children := entry :: !children;
+    entry
+
+    let id {id;} = id
+
+    let content {content;} = content
+
+end
+
 module State =
   struct
     type t =
