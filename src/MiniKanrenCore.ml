@@ -1108,6 +1108,7 @@ module LogEntry : sig
   val make    : string -> t -> t
   val id      : t -> int
   val content : t -> string
+  val print   : Format.formatter -> t -> unit
 end = struct
 
   type t =
@@ -1126,6 +1127,28 @@ end = struct
     ; lastId    = ref 0
     }
 
+  let rec get_root {parent;} as e = match parent with
+    | Some p -> get_root p
+    | None   -> e
+
+  let print ff e =
+    let rec helper ff {content; children} =
+      let print_child child =
+        Format.fprintf ff "@;%a" helper child
+      in
+      let print_children = function
+      | [] -> ()
+      | children ->
+        Format.fprintf ff "@[<v>";
+        List.iter print_child children;
+        Format.fprintf ff "@]"
+      in
+      Format.fprintf ff "@[<v>%s" content;
+      print_children @@ List.rev !children;
+      Format.fprintf ff "@]"
+    in
+    Format.fprintf ff "%a@;" helper e
+
   let make str ({lastId; children} as p) =
     incr lastId;
     let entry =
@@ -1136,11 +1159,22 @@ end = struct
     ; lastId    = lastId
     } in
     children := entry :: !children;
+    (* print Format.std_formatter @@ get_root entry; *)
     entry
 
     let id {id;} = id
 
     let content {content;} = content
+
+    (* let _ =
+      let root = empty () in
+      let a = make "a" root in
+      let _ = make "a1" a in
+      let _ = make "a2" a in
+      let _ = make "b" root in
+      let _ = make "c" root in
+      print Format.std_formatter root *)
+      (* Format.fprintf Format.std_formatter "@?" *)
 
 end
 
@@ -1151,6 +1185,7 @@ module State =
       ; subst : Subst.t
       ; ctrs  : Constraints.t
       ; scope : scope_t
+      ; entry : LogEntry.t
       }
 
     let empty () =
@@ -1158,11 +1193,13 @@ module State =
       ; subst = Subst.empty
       ; ctrs  = Constraints.empty
       ; scope = new_scope ()
+      ; entry = LogEntry.empty ()
       }
 
     let env   {env;} = env
     let subst {subst;} = subst
     let constraints {ctrs;} = ctrs
+    let log_entry {entry;} = entry
 
     let show  {env; subst; ctrs; scope} =
       sprintf "st {%s, %s} scope=%d" (Subst.show subst) (Constraints.show ~env ctrs) scope
@@ -1172,7 +1209,13 @@ module State =
       let i = (!!!x : inner_logic).index in
       (x,i)
 
-    let incr_scope {scope} as st = {st with scope = new_scope ()}
+    let incr_scope ?e ({scope; entry} as st) =
+      let e' = match e with
+      | Some e -> e
+      | None   -> entry
+      in
+      {st with scope = new_scope (); entry = e'}
+
   end
 
 type 'a goal' = State.t -> 'a
@@ -1257,8 +1300,9 @@ let list_fold_right0 ~f ~initer xs =
   in
   helper (List.rev xs)
 
-let conde: goal list -> goal = fun xs st ->
-  let st = State.incr_scope st in
+let conde: goal list -> goal =
+  let open State in fun xs ({entry;} as st) ->
+  let st = incr_scope ~e:(LogEntry.make "conde" entry) st in
   list_fold_right0 ~initer:(fun x -> x)
     xs
     ~f:(fun g acc st ->

@@ -88,7 +88,7 @@ module State :
     (* val show : t -> string *)
 
     val new_var : t -> ('a, 'b) injected * int
-    val incr_scope : t -> t
+    (* val incr_scope : t -> t *)
   end
 
 (** Goal converts a state into a lazy stream of states *)
