@@ -1101,6 +1101,17 @@ end*)
 (* module Constraints = DefaultConstraints *)
 module Constraints = FastConstraints
 
+module Logger =
+  struct
+    type entry = { lvl : int; msg : string }
+
+    type t =
+    { init : State.id -> unit
+    ; log  : entry -> State.Id.t -> State.Id.t -> unit
+    }
+
+  end
+
 module LogEntry : sig
   type t
 
@@ -1166,40 +1177,50 @@ end = struct
 
     let content {content;} = content
 
-    (* let _ =
+    let _ =
       let root = empty () in
       let a = make "a" root in
       let _ = make "a1" a in
       let _ = make "a2" a in
       let _ = make "b" root in
       let _ = make "c" root in
-      print Format.std_formatter root *)
+      print Format.std_formatter root
       (* Format.fprintf Format.std_formatter "@?" *)
 
 end
 
 module State =
   struct
+    module Id =
+      struct
+        type t = int
+        let hash = Hashtbl.hash
+        let equal = (==)
+      end
+
     type t =
-      { env   : Env.t
-      ; subst : Subst.t
-      ; ctrs  : Constraints.t
-      ; scope : scope_t
-      ; entry : LogEntry.t
+      { id      : Id.t
+      ; env     : Env.t
+      ; subst   : Subst.t
+      ; ctrs    : Constraints.t
+      ; scope   : scope_t
+      ; lastId  : int ref
+      ; logger  : Logger.t option
       }
 
-    let empty () =
-      { env   = Env.empty ()
-      ; subst = Subst.empty
-      ; ctrs  = Constraints.empty
-      ; scope = new_scope ()
-      ; entry = LogEntry.empty ()
+    let empty ?logger () =
+      { id      = 0
+      ; env     = Env.empty ()
+      ; subst   = Subst.empty
+      ; ctrs    = Constraints.empty
+      ; scope   = new_scope ()
+      ; lastId  = ref 0
+      ; logger  = logger
       }
 
     let env   {env;} = env
     let subst {subst;} = subst
     let constraints {ctrs;} = ctrs
-    let log_entry {entry;} = entry
 
     let show  {env; subst; ctrs; scope} =
       sprintf "st {%s, %s} scope=%d" (Subst.show subst) (Constraints.show ~env ctrs) scope
@@ -1208,6 +1229,8 @@ module State =
       let (x,_) = Env.fresh ~scope env in
       let i = (!!!x : inner_logic).index in
       (x,i)
+
+
 
     let incr_scope ?e ({scope; entry} as st) =
       let e' = match e with

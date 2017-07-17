@@ -84,6 +84,14 @@ module State :
     (** State type *)
     type t
 
+    (** Id - unique identifier of state within one search *)
+    module Id :
+      sig
+        type t
+        val hash  : t -> int
+        val equal : t -> t -> bool
+      end
+
     (** Printing helper *)
     (* val show : t -> string *)
 
@@ -206,6 +214,22 @@ module Fresh :
   end
 
 (** {2 Top-level running primitives} *)
+
+(** Logger allows to inject some side-effects to run of a goal.
+    The user should provide two functions:
+      [init id] - that takes identifier of initial state and may perform some initialisation
+      [log entry parent id] - logs a new state of search with given verbosity level, message and an identifier of parent state
+  *)
+module Logger :
+  sig
+    type entry = { lvl : int; msg : string }
+
+    type t =
+    { init : State.id -> unit
+    ; log : entry -> State.Id.t -> State.Id.t -> unit
+    }
+
+  end
 
 (** [run n g h] runs a goal [g] with [n] logical parameters and passes refined results to the handler [h]. The number of parameters is encoded using variadic
     machinery {a la} Danvy and represented by a number of predefined numerals and successor function (see below). The refinement replaces each variable, passed
