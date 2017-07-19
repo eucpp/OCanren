@@ -262,6 +262,8 @@ module Listener :
       | Goal of string * string list
       | Custom of string
 
+    val string_of_event : event -> string
+
     type t =
     < init : StateId.t -> unit
     ; on_event : event -> StateId.t -> StateId.t -> unit

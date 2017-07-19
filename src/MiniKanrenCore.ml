@@ -1120,6 +1120,24 @@ module Listener =
       | Goal of string * string list
       | Custom of string
 
+    let string_of_event = function
+    | Success             -> "success"
+    | Failure reason      -> sprintf "failure: %s" reason
+    | Conj                -> "&&&"
+    | Disj                -> "|||"
+    | Goal (name, args)   -> sprintf "%s %s" name @@ String.concat " " args
+    | Custom str          -> str
+    | Unif args           ->
+      begin match args with
+      | Some (x, y) -> sprintf "%s === %s" x y
+      | None        -> "==="
+      end
+    | Diseq args          ->
+      begin match args with
+      | Some (x, y) -> sprintf "%s =/= %s" x y
+      | None        -> "=/="
+      end
+
     type t =
     < init : StateId.t -> unit
     ; on_event : event -> StateId.t -> StateId.t -> unit
@@ -1127,83 +1145,6 @@ module Listener =
 
     (* let log_unif listener *)
   end
-
-module LogEntry : sig
-  type t
-
-  val empty   : unit -> t
-  val make    : string -> t -> t
-  val id      : t -> int
-  val content : t -> string
-  val print   : Format.formatter -> t -> unit
-end = struct
-
-  type t =
-    { id        : int
-    ; content   : string
-    ; parent    : t option
-    ; children  : t list ref
-    ; lastId    : int ref
-    }
-
-  let empty () =
-    { id        = 0
-    ; content   = "root"
-    ; parent    = None
-    ; children  = ref []
-    ; lastId    = ref 0
-    }
-
-  let rec get_root {parent;} as e = match parent with
-    | Some p -> get_root p
-    | None   -> e
-
-  let print ff e =
-    let rec helper ff {content; children} =
-      let print_child child =
-        Format.fprintf ff "@;%a" helper child
-      in
-      let print_children = function
-      | [] -> ()
-      | children ->
-        Format.fprintf ff "@[<v>";
-        List.iter print_child children;
-        Format.fprintf ff "@]"
-      in
-      Format.fprintf ff "@[<v>%s" content;
-      print_children @@ List.rev !children;
-      Format.fprintf ff "@]"
-    in
-    Format.fprintf ff "%a@;" helper e
-
-  let make str ({lastId; children} as p) =
-    incr lastId;
-    let event =
-    { id        = !lastId
-    ; content   = str
-    ; parent    = Some p
-    ; children  = ref []
-    ; lastId    = lastId
-    } in
-    children := event :: !children;
-    (* print Format.std_formatter @@ get_root entry; *)
-    event
-
-    let id {id;} = id
-
-    let content {content;} = content
-
-    (* let _ =
-      let root = empty () in
-      let a = make "a" root in
-      let _ = make "a1" a in
-      let _ = make "a2" a in
-      let _ = make "b" root in
-      let _ = make "c" root in
-      print Format.std_formatter root *)
-      (* Format.fprintf Format.std_formatter "@?" *)
-
-end
 
 module State =
   struct
