@@ -84,19 +84,19 @@ module State :
     (** State type *)
     type t
 
-    (** Id - unique identifier of state within one search *)
-    module Id :
-      sig
-        type t
-        val hash  : t -> int
-        val equal : t -> t -> bool
-      end
-
     (** Printing helper *)
     (* val show : t -> string *)
 
     val new_var : t -> ('a, 'b) injected * int
     (* val incr_scope : t -> t *)
+  end
+
+(** StateId - unique identifier of state within one search *)
+module StateId :
+  sig
+    type t
+    val hash  : t -> int
+    val equal : t -> t -> bool
   end
 
 (** Goal converts a state into a lazy stream of states *)
@@ -143,6 +143,35 @@ val to_logic : 'a -> 'a logic
     Raises exception [Not_a_value] if [x] contains logic variables. *)
 val from_logic : 'a logic -> 'a
 
+(**
+  The exception is raised when we try to extract plain term from the answer but only terms with free
+  variables are possible.
+*)
+exception Not_a_value
+
+(** Reification helper *)
+type helper
+
+(** Reification result *)
+class type ['a,'b] refined = object
+  (** Returns [true] if the term has any free logic variable inside *)
+  method is_open: bool
+
+  (**
+    Get the answer as plain term. Raises exception [Not_a_value] when only terms with free variables
+    are available.
+  *)
+  method prj: 'a
+
+  (**
+    Get the answer as non-flat value. If the actual answer is a flat value it will be injected using
+    the function provided.
+   *)
+  method refine: (helper -> ('a, 'b) injected -> 'b) -> inj:('a -> 'b) -> 'b
+end
+
+type ('a, 'b) printer = (('a, 'b) refined -> string)
+
 (** {2 miniKanren basic primitives} *)
 
 (** [call_fresh f] creates a fresh logical variable and passes it to the
@@ -152,10 +181,10 @@ val call_fresh : (('a, 'b) injected -> goal) -> goal
 val report_counters : unit -> unit
 
 (** [x === y] creates a goal, which performs a unification of [x] and [y] *)
-val (===) : ?loc:string -> ('a, 'b logic) injected -> ('a, 'b logic) injected -> goal
+val (===) : ?p:('a, 'b) printer -> ('a, 'b logic) injected -> ('a, 'b logic) injected -> goal
 
 (** [x =/= y] creates a goal, which introduces a disequality constraint for [x] and [y] *)
-val (=/=) : ('a, 'b logic) injected -> ('a, 'b logic) injected -> goal
+val (=/=) : ?p:('a, 'b) printer -> ('a, 'b logic) injected -> ('a, 'b logic) injected -> goal
 
 (** [conj s1 s2] creates a goal, which is a conjunction of its arguments *)
 val conj : goal -> goal -> goal
@@ -185,8 +214,9 @@ val bind_star : goal list -> goal
 (** [success] always succeeds *)
 val success : goal
 
-(** [failure] always fails *)
-val failure : goal
+(** [failure ~reason] always fails.
+    [reason] is a string parameter that describes the cause of failure *)
+val failure : reason:string -> goal
 
 (** {2 Combinators to produce fresh variables} *)
 module Fresh :
@@ -222,13 +252,20 @@ module Fresh :
   *)
 module Logger :
   sig
-    type entry = { lvl : int; msg : string }
+    type entry =
+      | Success
+      | Failure of string
+      | Conj
+      | Disj
+      | Unif of (string * string) option
+      | Diseq of (string * string) option
+      | Goal of string * string list
+      | Custom of string
 
     type t =
-    { init : State.id -> unit
-    ; log : entry -> State.Id.t -> State.Id.t -> unit
-    }
-
+    < init : StateId.t -> unit
+    ; log : entry -> StateId.t -> StateId.t -> unit
+    >
   end
 
 (** [run n g h] runs a goal [g] with [n] logical parameters and passes refined results to the handler [h]. The number of parameters is encoded using variadic
@@ -253,45 +290,6 @@ val run : (unit -> ('a -> 'c goal') * ('d -> 'e -> 'f) *
   See also syntax extension which simplifies the syntax.
 *)
 val delay  : (unit -> goal) -> goal
-
-val trace: string -> goal -> goal
-
-(** Reification helper *)
-type helper
-
-val project1: msg:string -> (helper -> ('a, 'b) injected -> string) -> ('a, 'b) injected -> goal
-val project2: msg:string -> (helper -> ('a, 'b) injected -> string) -> ('a, 'b) injected -> ('a, 'b) injected -> goal
-val project3: msg:string -> (helper -> ('a, 'b) injected -> string) ->
-    ('a, 'b) injected -> ('a, 'b) injected -> ('a, 'b) injected -> goal
-
-(* Like (===) but with tracing *)
-val unitrace: ?loc:string -> (helper -> ('a, 'b) injected -> string) -> ('a, 'b) injected -> ('a, 'b) injected -> goal
-
-val diseqtrace: (helper -> ('a, 'b) injected -> string) -> ('a, 'b) injected -> ('a, 'b) injected -> goal
-
-(**
-  The exception is raised when we try to extract plain term from the answer but only terms with free
-  variables are possible.
-*)
-exception Not_a_value
-
-(** Reification result *)
-class type ['a,'b] refined = object
-  (** Returns [true] if the term has any free logic variable inside *)
-  method is_open: bool
-
-  (**
-    Get the answer as plain term. Raises exception [Not_a_value] when only terms with free variables
-    are available.
-  *)
-  method prj: 'a
-
-  (**
-    Get the answer as non-flat value. If the actual answer is a flat value it will be injected using
-    the function provided.
-   *)
-  method refine: (helper -> ('a, 'b) injected -> 'b) -> inj:('a -> 'b) -> 'b
-end
 
 (** A type to refine a stream of states into the stream of answers (w.r.t. some known logic variable *)
 type ('a, 'b) refiner
@@ -517,59 +515,66 @@ module Trace :
           [project one (fun q -> printf "%s" q#prj) !!5 ] --- prints injected value
      *)
     val trace :
-      (unit -> (('t -> goal) -> 'a) * ('h -> 'e -> unit) * (State.t -> 'd -> 'e) * ('t -> 'd * State.t)) -> 'h -> 'a
+      (* (unit -> (('t -> goal) -> 'a) * ('h -> 'e -> Logger.entry) * (State.t -> 'd -> 'e) * ('t -> 'd * goal * State.t)) -> 'h -> 'a *)
+      (unit -> (('t -> goal) -> 'a) * ('h -> 'e -> Logger.entry) * (State.t -> 'd -> 'e) * ('t -> 'f * State.t) * ('f -> 'd * goal)) -> 'h -> 'a
 
     val succ :
-      (unit -> (('a -> 'b) -> 'c) * ('d -> 'e -> 'f) * ('g -> 'h -> 'i) * ('j -> 'k * 'l)) ->
+      (unit -> (('a -> 'b) -> 'c) * ('d -> 'e -> 'f) * ('g -> 'h -> 'i) * ('j -> 'k * 'l) * ('x -> 'y * 'z)) ->
       unit ->
-      (((State.t -> ('m, 'n) refined) * 'a -> 'b) -> 'm -> 'c) *
+      (((State.t -> ('m, 'n) refined) * 'a -> 'b) -> ('m, 'n) injected -> 'c) *
       (('o -> 'd) -> 'o * 'e -> 'f) *
       ('g -> ('g -> 'p) * 'h -> 'p * 'i) *
-      ('q * 'j -> ('q * 'k) * 'l)
+      ('q * 'j -> ('q * 'k) * 'l) *
+      ('r * 'x -> ('r * 'y) * 'z)
 
     val one : unit ->
-      ((('a, 'b) refiner * State.t -> goal) ->
-        ('a, 'b) injected -> goal) *
+      ((('a, 'b) refiner * (goal * State.t) -> goal) ->
+        ('a, 'b) injected -> goal -> goal) *
       (('l -> 'm) -> 'l -> 'm) *
       (State.t ->
         ('a, 'b) refiner ->
         ('a, 'b) refined) *
-      ('h -> 'h)
+      ('s * ('t * 'u) -> ('s * 't) * 'u) *
+      ('q * 'r -> 'q * 'r)
 
     val two : unit ->
-      ((('a, 'b) refiner * (('c, 'd) refiner * State.t) -> goal) ->
-        ('a, 'b) injected -> ('c, 'd) injected -> goal) *
+      ((('a, 'b) refiner * (('c, 'd) refiner * (goal * State.t)) -> goal) ->
+        ('a, 'b) injected -> ('c, 'd) injected -> goal -> goal) *
       (('g -> 'h -> 'i) -> 'g * 'h -> 'i) *
       (State.t ->
         ('a, 'b) refiner * ('c, 'd) refiner ->
         ('a, 'b) refined * ('c, 'd) refined) *
+      ('p * ('q * ('r * 'u)) -> ('p * ('q * 'r)) * 'u) *
       ('m * ('n * 'o) -> ('m * 'n) * 'o)
 
     val three : unit ->
-      (((('a, 'b) refiner * (('c, 'd) refiner * (('e, 'f) refiner * State.t))) -> goal) ->
-         ('a, 'b) injected -> ('c, 'd) injected -> ('e, 'f) injected -> goal) *
+      (((('a, 'b) refiner * (('c, 'd) refiner * (('e, 'f) refiner * (goal * State.t)))) -> goal) ->
+         ('a, 'b) injected -> ('c, 'd) injected -> ('e, 'f) injected -> goal -> goal) *
       (('i -> 'j -> 'k -> 'l) -> 'i * ('j * 'k) -> 'l) *
       (State.t ->
         ('a, 'b) refiner * (('c, 'd) refiner * ('e, 'f) refiner) ->
         ('a, 'b) refined * (('c, 'd) refined * ('e, 'f) refined)) *
-      ('q * ('r * ('s * 't)) -> ('q * ('r * 's)) * 't)
+      ('q * ('r * ('s * ('t * 'u))) -> ('q * ('r * ('s * 't))) * 'u) *
+      ('qa * ('ra * ('sa * 'ta)) -> ('qa * ('ra * 'sa)) * 'ta)
 
     val four : unit ->
-      (((('a, 'b) refiner * (('c, 'd) refiner * (('e, 'f) refiner * (('g, 'h) refiner * State.t)))) -> goal) ->
-         ('a, 'b) injected -> ('c, 'd) injected -> ('e, 'f) injected -> ('g, 'h) injected -> goal) *
+      (((('a, 'b) refiner * (('c, 'd) refiner * (('e, 'f) refiner * (('g, 'h) refiner * (goal * State.t))))) -> goal) ->
+         ('a, 'b) injected -> ('c, 'd) injected -> ('e, 'f) injected -> ('g, 'h) injected -> goal -> goal) *
       (('i -> 'j -> 'k -> 'l -> 'm) -> 'i * ('j * ('k * 'l)) -> 'm) *
       (State.t ->
         ('a, 'b) refiner * (('c, 'd) refiner * (('e, 'f) refiner * ('g, 'h) refiner)) ->
         ('a, 'b) refined * (('c, 'd) refined * (('e, 'f) refined * ('g, 'h) refined))) *
-      ('q * ('r * ('s * ('t * 'u))) -> ('q * ('r * ('s * 't))) * 'u)
+      ('q * ('r * ('s * ('t * ('u * 'v)))) -> ('q * ('r * ('s * ('t * 'u)))) * 'v) *
+      ('qa * ('ra * ('sa * ('ta * 'ua))) -> ('qa * ('ra * ('sa * 'ta))) * 'ua)
 
     val five : unit ->
-      (((('a, 'b) refiner * (('c, 'd) refiner * (('e, 'f) refiner * (('g, 'h) refiner * (('i, 'j) refiner * State.t))))) -> goal) ->
-         ('a, 'b) injected -> ('c, 'd) injected -> ('e, 'f) injected -> ('g, 'h) injected -> ('i, 'j) injected -> goal) *
+      (((('a, 'b) refiner * (('c, 'd) refiner * (('e, 'f) refiner * (('g, 'h) refiner * (('i, 'j) refiner * (goal * State.t)))))) -> goal) ->
+         ('a, 'b) injected -> ('c, 'd) injected -> ('e, 'f) injected -> ('g, 'h) injected -> ('i, 'j) injected -> goal -> goal) *
       (('k -> 'l -> 'm -> 'n -> 'o -> 'p) -> 'k * ('l * ('m * ('n * 'o))) -> 'p) *
       (State.t ->
         ('a, 'b) refiner * (('c, 'd) refiner * (('e, 'f) refiner * (('g, 'h) refiner * ('i, 'j) refiner))) ->
         ('a, 'b) refined * (('c, 'd) refined * (('e, 'f) refined * (('g, 'h) refined * ('i, 'j) refined)))) *
-      ('q * ('r * ('s * ('t * ('u * 'v)))) -> ('q * ('r * ('s * ('t * 'u)))) * 'v)
+      ('q * ('r * ('s * ('t * ('u * ('v * 'w))))) -> ('q * ('r * ('s * ('t * ('u * 'v))))) * 'w) *
+      ('qa * ('ra * ('sa * ('ta * ('ua * 'va)))) -> ('qa * ('ra * ('sa * ('ta * 'ua)))) * 'va)
 
   end

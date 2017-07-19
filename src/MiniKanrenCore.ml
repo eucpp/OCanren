@@ -1101,15 +1101,31 @@ end*)
 (* module Constraints = DefaultConstraints *)
 module Constraints = FastConstraints
 
+module StateId =
+  struct
+    type t = int
+    let hash = Hashtbl.hash
+    let equal = (==)
+  end
+
 module Logger =
   struct
-    type entry = { lvl : int; msg : string }
+    type entry =
+      | Success
+      | Failure of string
+      | Conj
+      | Disj
+      | Unif of (string * string) option
+      | Diseq of (string * string) option
+      | Goal of string * string list
+      | Custom of string
 
     type t =
-    { init : State.id -> unit
-    ; log  : entry -> State.Id.t -> State.Id.t -> unit
-    }
+    < init : StateId.t -> unit
+    ; log : entry -> StateId.t -> StateId.t -> unit
+    >
 
+    (* let log_unif logger *)
   end
 
 module LogEntry : sig
@@ -1177,29 +1193,22 @@ end = struct
 
     let content {content;} = content
 
-    let _ =
+    (* let _ =
       let root = empty () in
       let a = make "a" root in
       let _ = make "a1" a in
       let _ = make "a2" a in
       let _ = make "b" root in
       let _ = make "c" root in
-      print Format.std_formatter root
+      print Format.std_formatter root *)
       (* Format.fprintf Format.std_formatter "@?" *)
 
 end
 
 module State =
   struct
-    module Id =
-      struct
-        type t = int
-        let hash = Hashtbl.hash
-        let equal = (==)
-      end
-
     type t =
-      { id      : Id.t
+      { id      : StateId.t
       ; env     : Env.t
       ; subst   : Subst.t
       ; ctrs    : Constraints.t
@@ -1230,14 +1239,21 @@ module State =
       let i = (!!!x : inner_logic).index in
       (x,i)
 
-
-
-    let incr_scope ?e ({scope; entry} as st) =
-      let e' = match e with
+    let incr_scope ?e ({scope;} as st) =
+      (* let e' = match e with
       | Some e -> e
       | None   -> entry
-      in
-      {st with scope = new_scope (); entry = e'}
+      in *)
+      {st with scope = new_scope ();(* entry = e' *)}
+
+    let log e ({id; lastId; logger} as st) =
+      incr lastId;
+      let new_id = !lastId in
+      begin match logger with
+      | Some logger -> logger#log e id new_id
+      | None -> ()
+      end;
+      {st with id=new_id}
 
   end
 
@@ -1260,79 +1276,6 @@ let report_counters () =
   printfn "total diseq calls : %d" !diseq_counter;
   printfn "logged diseq calls : %d" !logged_diseq_counter
 
-let (===) ?loc (x: _ injected) y =
-  let open State in fun {env; subst; ctrs; scope} as st ->
-  (* we should always unify two injected types *)
-  (* incr unif_counter; *)
-  match Subst.unify env x y scope subst with
-  | None -> MKStream.nil
-  | Some (prefix, s) ->
-      try
-        let ctrs' = Constraints.check ~prefix env s ctrs in
-        MKStream.single {st with subst=s; ctrs=ctrs'}
-      with Disequality_violated -> MKStream.nil
-
-let (=/=) x y =
-  let open State in fun {env; subst; ctrs; scope} as st ->
-  (* For disequalities we unify in non-local scope to prevent defiling *)
-  match Subst.unify env x y non_local_scope subst with
-  | None -> MKStream.single st
-  | Some ([],_) -> MKStream.nil (* this constraint can't be fulfilled *)
-  | Some (prefix,_) ->
-      let ctrs' = Constraints.extend ~prefix env ctrs in
-      MKStream.single {st with ctrs=ctrs'}
-
-let delay : (unit -> goal) -> goal = fun g ->
-  fun st -> MKStream.from_fun (fun () -> g () st)
-
-let inc : goal -> goal = fun g st -> MKStream.from_fun (fun () -> g st)
-
-let conj f g st = MKStream.bind (f st) g
-
-let (&&&) = conj
-
-let disj f g st =
-  let open MKStream in
-  mplus (f st) (MKStream.from_fun (fun () -> g st))
-
-let (|||) = disj
-
-(* mplus_star *)
-let rec (?|) = function
-| []    -> failwith "wrong argument of ?|"
-| [h]   -> h
-| h::tl -> h ||| (?| tl)
-
-(* "bind*" *)
-let rec (?&) = function
-| []   -> failwith "wrong argument of ?&"
-| [h]  -> h
-| x::y::tl -> ?& ((x &&& y)::tl)
-
-let bind_star = (?&)
-
-let list_fold ~f ~initer xs =
-  match xs with
-  | [] -> failwith "bad argument"
-  | start::xs -> ListLabels.fold_left ~init:(initer start) ~f xs
-
-let list_fold_right0 ~f ~initer xs =
-  let rec helper = function
-  | [] -> failwith "bad_argument"
-  | x::xs -> list_fold ~initer ~f:(fun acc x -> f x acc) (x::xs)
-  in
-  helper (List.rev xs)
-
-let conde: goal list -> goal =
-  let open State in fun xs ({entry;} as st) ->
-  let st = incr_scope ~e:(LogEntry.make "conde" entry) st in
-  list_fold_right0 ~initer:(fun x -> x)
-    xs
-    ~f:(fun g acc st ->
-          MKStream.mplus (g st) @@ MKStream.inc (fun () -> acc st)
-      )
-  |> (fun g -> MKStream.inc (fun ()  -> g st))
-
 module Fresh =
   struct
 
@@ -1353,8 +1296,9 @@ module Fresh =
 
   end
 
-let success st = MKStream.single st
-let failure _  = MKStream.nil
+let success st = MKStream.single @@ State.log Logger.Success st
+
+let failure ~reason st = let _ = State.log (Logger.Failure reason) st in MKStream.nil
 
 exception FreeVarFound
 let has_free_vars is_var x =
@@ -1406,6 +1350,8 @@ let prj : ('a, 'b) injected -> 'a = fun x ->
   let rr = make_rr x @@ State.empty () in
   rr#prj
 
+type ('a, 'b) printer = (('a, 'b) refined -> string)
+
 module R : sig
   type ('a, 'b) refiner
 
@@ -1456,7 +1402,6 @@ module LogicAdder :
       call_fresh (fun logic st -> (R.refiner logic, prev (f logic) st))
   end
 
-
 let succ n () =
   let adder, currier, app = n () in
   (LogicAdder.succ adder, Uncurry.succ currier, ApplyLatest.succ app)
@@ -1478,60 +1423,13 @@ let run n goalish f =
   let run f = f (State.empty ()) in
   run (adder goalish) |> ApplyLatest.apply app_num |> (currier f)
 
-(* Tracing/debugging stuff *)
-
-let trace msg g = fun state ->
-  printf "%s: %s\n%!" msg (State.show state);
-  g state
-
-let refine_with_state =
-  let open State in fun {env; subst; ctrs;} term ->
-  refine env subst (Constraints.refine env subst ctrs) (Obj.repr term)
-
-let project1 ~msg : (helper -> 'b -> string) -> ('a, 'b) injected -> goal = fun shower q st ->
-  printf "%s %s\n%!" msg (shower (helper_of_state st) @@ Obj.magic @@ refine_with_state st q);
-  success st
-
-let project2 ~msg : (helper -> 'b -> string) -> (('a, 'b) injected as 'v) -> 'v -> goal = fun shower q r st ->
-  printf "%s '%s' and '%s'\n%!" msg (shower (helper_of_state st) @@ Obj.magic @@ refine_with_state st q)
-                                    (shower (helper_of_state st) @@ Obj.magic @@ refine_with_state st r);
-  success st
-
-let project3 ~msg : (helper -> 'b -> string) -> (('a, 'b) injected as 'v) -> 'v -> 'v -> goal = fun shower q r s st ->
-  printf "%s '%s' and '%s' and '%s'\n%!" msg
-    (shower (helper_of_state st) @@ Obj.magic @@ refine_with_state st q)
-    (shower (helper_of_state st) @@ Obj.magic @@ refine_with_state st r)
-    (shower (helper_of_state st) @@ Obj.magic @@ refine_with_state st s);
-  success st
-
-let unitrace ?loc shower x y = fun st ->
-  incr logged_unif_counter;
-
-  let ans = (x === y) st in
-  (* printf "%d: unify '%s' and '%s'" !logged_unif_counter (shower (helper_of_state st) x) (shower (helper_of_state st) y);
-  (match loc with Some l -> printf " on %s" l | None -> ());
-
-  if MKStream.is_nil ans then printfn "  -"
-  else  printfn "  +"; *)
-  ans
-
-let diseqtrace shower x y = fun st ->
-  incr logged_diseq_counter;
-  let ans = (x =/= y) st in
-  (* printf "%d: (=/=) '%s' and '%s'" !logged_diseq_counter
-    (shower (helper_of_state st) x)
-    (shower (helper_of_state st) y);
-  if MKStream.is_nil ans then printfn "  -"
-  else  printfn "  +"; *)
-  ans;;
-
 module Refiner =
   struct
     type ('a, 'b) refiner = State.t -> ('a, 'b) refined
 
     let succ prev k x = prev (fun y -> k (make_rr x, y))
 
-    let zero k st = k st st
+    let zero : ((goal * State.t) -> goal) -> goal -> goal = fun k g st -> k (g, st) st
   end
 
 module ApplyState =
@@ -1546,33 +1444,113 @@ module Trace =
     type ('a, 'b) refiner = State.t -> ('a, 'b) refined
 
     let succ n () =
-      let refiner, uncurrier, app, ext = n () in
-      (Refiner.succ refiner, Uncurry.succ uncurrier, ApplyState.succ app, ExtractDeepest.succ ext)
+      let refiner, uncurrier, app, ext1, ext2 = n () in
+      (Refiner.succ refiner, Uncurry.succ uncurrier, ApplyState.succ app, ExtractDeepest.succ ext1, ExtractDeepest.succ ext2)
 
-    (* let _:int = succ *)
-
-    let one () = (Refiner.(succ zero), (@@), ApplyState.one, ExtractDeepest.ext2)
+    let one () = (Refiner.(succ zero), (@@), ApplyState.one, ExtractDeepest.(succ ext2), ExtractDeepest.ext2)
 
     let two   () = succ one ()
     let three () = succ two ()
     let four  () = succ three ()
     let five  () = succ four ()
 
-    (* let _:int = three *)
-
     let trace n callback =
-      let refiner, uncurrier, app, ext = n () in
-      let f tup st =
-        (uncurrier @@ callback) tup;
-        success st
+      let refiner, uncurrier, app, ext1, ext2 = n () in
+      let f g tup st =
+        let e = (uncurrier @@ callback) tup in
+        g (State.log e st)
       in
       refiner (
         fun tup ->
-          let x, st = ext tup in
-          f (app st x)
+          let x, st = ext1 tup in
+          let y, g = ext2 x in
+          f g (app st y)
       )
+
+    let print_pair ?p x y =
+      match p with
+      | Some p -> Some (p x, p y)
+      | None   -> None
+
+    let unif ?p x y = Logger.Unif (print_pair x y)
+    let diseq ?p x y = Logger.Diseq (print_pair x y)
+
   end
 
-(* ***************************** a la relational StdLib here ***************  *)
+let (===) ?p (x: _ injected) y =
+  Trace.(trace two @@ unif ~p) x y (
+    let open State in fun {env; subst; ctrs; scope} as st ->
+    match Subst.unify env x y scope subst with
+    | None -> failure ~reason:"Unification failed" st
+    | Some (prefix, s) ->
+        try
+          let ctrs' = Constraints.check ~prefix env s ctrs in
+          success {st with subst=s; ctrs=ctrs'}
+        with Disequality_violated ->
+          failure ~reason:"Disequality constraints violated" st
+  )
 
-let report_counters () = ()
+let (=/=) ?p x y =
+  Trace.(trace two @@ diseq ~p) x y (
+    let open State in fun {env; subst; ctrs; scope} as st ->
+    (* For disequalities we unify in non-local scope to prevent defiling *)
+    match Subst.unify env x y non_local_scope subst with
+    | None -> success st
+    | Some ([],_) -> failure ~reason:"Constraint cannot be fulfilled" st
+    | Some (prefix,_) ->
+        let ctrs' = Constraints.extend ~prefix env ctrs in
+        success {st with ctrs=ctrs'}
+  )
+
+let delay : (unit -> goal) -> goal = fun g ->
+  fun st -> MKStream.from_fun (fun () -> g () st)
+
+let inc : goal -> goal = fun g st -> MKStream.from_fun (fun () -> g st)
+
+let conj f g st =
+  let st = State.log Logger.Conj st in
+  MKStream.bind (f st) g
+
+let (&&&) = conj
+
+let disj f g st =
+  let st = State.log Logger.Disj st in
+  MKStream.mplus (f st) (MKStream.from_fun (fun () -> g st))
+
+let (|||) = disj
+
+(* "mplus*" *)
+let rec (?|) = function
+| []    -> failwith "wrong argument of ?|"
+| [h]   -> h
+| h::tl -> h ||| (?| tl)
+
+(* "bind*" *)
+let rec (?&) = function
+| []   -> failwith "wrong argument of ?&"
+| [h]  -> h
+| x::y::tl -> ?& ((x &&& y)::tl)
+
+let bind_star = (?&)
+
+let list_fold ~f ~initer xs =
+  match xs with
+  | [] -> failwith "bad argument"
+  | start::xs -> ListLabels.fold_left ~init:(initer start) ~f xs
+
+let list_fold_right0 ~f ~initer xs =
+  let rec helper = function
+  | [] -> failwith "bad_argument"
+  | x::xs -> list_fold ~initer ~f:(fun acc x -> f x acc) (x::xs)
+  in
+  helper (List.rev xs)
+
+let conde: goal list -> goal =
+  let open State in fun xs st (*({entry;} as st)*) ->
+  let st = incr_scope (*~e:(LogEntry.make "conde" entry)*) st in
+  list_fold_right0 ~initer:(fun x -> x)
+    xs
+    ~f:(fun g acc st ->
+          MKStream.mplus (g st) @@ MKStream.inc (fun () -> acc st)
+      )
+  |> (fun g -> MKStream.inc (fun ()  -> g st))
