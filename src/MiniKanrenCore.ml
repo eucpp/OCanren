@@ -1108,9 +1108,9 @@ module StateId =
     let equal = (==)
   end
 
-module Logger =
+module Listener =
   struct
-    type entry =
+    type event =
       | Success
       | Failure of string
       | Conj
@@ -1122,10 +1122,10 @@ module Logger =
 
     type t =
     < init : StateId.t -> unit
-    ; log : entry -> StateId.t -> StateId.t -> unit
+    ; on_event : event -> StateId.t -> StateId.t -> unit
     >
 
-    (* let log_unif logger *)
+    (* let log_unif listener *)
   end
 
 module LogEntry : sig
@@ -1178,16 +1178,16 @@ end = struct
 
   let make str ({lastId; children} as p) =
     incr lastId;
-    let entry =
+    let event =
     { id        = !lastId
     ; content   = str
     ; parent    = Some p
     ; children  = ref []
     ; lastId    = lastId
     } in
-    children := entry :: !children;
+    children := event :: !children;
     (* print Format.std_formatter @@ get_root entry; *)
-    entry
+    event
 
     let id {id;} = id
 
@@ -1214,17 +1214,17 @@ module State =
       ; ctrs    : Constraints.t
       ; scope   : scope_t
       ; lastId  : int ref
-      ; logger  : Logger.t option
+      ; listener  : Listener.t option
       }
 
-    let empty ?logger () =
+    let empty ?listener () =
       { id      = 0
       ; env     = Env.empty ()
       ; subst   = Subst.empty
       ; ctrs    = Constraints.empty
       ; scope   = new_scope ()
       ; lastId  = ref 0
-      ; logger  = logger
+      ; listener  = listener
       }
 
     let env   {env;} = env
@@ -1246,11 +1246,11 @@ module State =
       in *)
       {st with scope = new_scope ();(* entry = e' *)}
 
-    let log e ({id; lastId; logger} as st) =
+    let new_event e ({id; lastId; listener} as st) =
       incr lastId;
       let new_id = !lastId in
-      begin match logger with
-      | Some logger -> logger#log e id new_id
+      begin match listener with
+      | Some listener -> listener#on_event e id new_id
       | None -> ()
       end;
       {st with id=new_id}
@@ -1296,9 +1296,9 @@ module Fresh =
 
   end
 
-let success st = MKStream.single @@ State.log Logger.Success st
+let success st = MKStream.single @@ State.new_event Listener.Success st
 
-let failure ~reason st = let _ = State.log (Logger.Failure reason) st in MKStream.nil
+let failure ~reason st = let _ = State.new_event (Listener.Failure reason) st in MKStream.nil
 
 exception FreeVarFound
 let has_free_vars is_var x =
@@ -1458,7 +1458,7 @@ module Trace =
       let refiner, uncurrier, app, ext1, ext2 = n () in
       let f g tup st =
         let e = (uncurrier @@ callback) tup in
-        g (State.log e st)
+        g (State.new_event e st)
       in
       refiner (
         fun tup ->
@@ -1472,8 +1472,8 @@ module Trace =
       | Some p -> Some (p x, p y)
       | None   -> None
 
-    let unif ?p x y = Logger.Unif (print_pair x y)
-    let diseq ?p x y = Logger.Diseq (print_pair x y)
+    let unif ?p x y = Listener.Unif (print_pair x y)
+    let diseq ?p x y = Listener.Diseq (print_pair x y)
 
   end
 
@@ -1508,13 +1508,13 @@ let delay : (unit -> goal) -> goal = fun g ->
 let inc : goal -> goal = fun g st -> MKStream.from_fun (fun () -> g st)
 
 let conj f g st =
-  let st = State.log Logger.Conj st in
+  let st = State.new_event Listener.Conj st in
   MKStream.bind (f st) g
 
 let (&&&) = conj
 
 let disj f g st =
-  let st = State.log Logger.Disj st in
+  let st = State.new_event Listener.Disj st in
   MKStream.mplus (f st) (MKStream.from_fun (fun () -> g st))
 
 let (|||) = disj

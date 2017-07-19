@@ -245,14 +245,14 @@ module Fresh :
 
 (** {2 Top-level running primitives} *)
 
-(** Logger allows to inject some side-effects to run of a goal.
+(** Listener allows to inject some side-effects to run of a goal.
     The user should provide two functions:
       [init id] - that takes identifier of initial state and may perform some initialisation
-      [log entry parent id] - logs a new state of search with given verbosity level, message and an identifier of parent state
+      [log event parent id] - logs a new state of search with given verbosity level, message and an identifier of parent state
   *)
-module Logger :
+module Listener :
   sig
-    type entry =
+    type event =
       | Success
       | Failure of string
       | Conj
@@ -264,7 +264,7 @@ module Logger :
 
     type t =
     < init : StateId.t -> unit
-    ; log : entry -> StateId.t -> StateId.t -> unit
+    ; on_event : event -> StateId.t -> StateId.t -> unit
     >
   end
 
@@ -515,8 +515,8 @@ module Trace :
           [project one (fun q -> printf "%s" q#prj) !!5 ] --- prints injected value
      *)
     val trace :
-      (* (unit -> (('t -> goal) -> 'a) * ('h -> 'e -> Logger.entry) * (State.t -> 'd -> 'e) * ('t -> 'd * goal * State.t)) -> 'h -> 'a *)
-      (unit -> (('t -> goal) -> 'a) * ('h -> 'e -> Logger.entry) * (State.t -> 'd -> 'e) * ('t -> 'f * State.t) * ('f -> 'd * goal)) -> 'h -> 'a
+      (* (unit -> (('t -> goal) -> 'a) * ('h -> 'e -> Listener.entry) * (State.t -> 'd -> 'e) * ('t -> 'd * goal * State.t)) -> 'h -> 'a *)
+      (unit -> (('t -> goal) -> 'a) * ('h -> 'e -> Listener.event) * (State.t -> 'd -> 'e) * ('t -> 'f * State.t) * ('f -> 'd * goal)) -> 'h -> 'a
 
     val succ :
       (unit -> (('a -> 'b) -> 'c) * ('d -> 'e -> 'f) * ('g -> 'h -> 'i) * ('j -> 'k * 'l) * ('x -> 'y * 'z)) ->
