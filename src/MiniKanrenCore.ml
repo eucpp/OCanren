@@ -1125,7 +1125,7 @@ module Listener =
     | Success             -> "success"
     | Failure reason      -> sprintf "failure: %s" reason
     | Conj                -> "&&&"
-    | Disj                -> "|||"
+    | Disj                -> "conde"
     | Goal (name, args)   -> sprintf "%s %s" name @@ String.concat " " args
     | Custom str          -> str
     | Unif args           ->
