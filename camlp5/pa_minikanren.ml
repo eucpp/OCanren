@@ -37,12 +37,11 @@
 open Pcaml
 open Printf
 
-let rec fold_right1 f = function
-| [h]  -> h
-| h::t -> f h (fold_right1 f t)
-;;
-
-let rec fold_left1 f xs = List.fold_left f (List.hd xs) (List.tl xs)
+let expr_list loc l =
+  List.fold_right
+  (fun head tail -> <:expr< [ $head$ :: $tail$ ] >>)
+  l
+  <:expr< [] >>
 
 EXTEND
   GLOBAL: expr;
@@ -51,11 +50,13 @@ EXTEND
   expr: LEVEL "expr1" [
     [ "fresh"; "("; vars=LIST0 LIDENT; ")"; clauses=LIST1 expr LEVEL "." ->
       let body =
-        let conjunctions = fold_left1
+        let clauses = expr_list loc clauses in
+        <:expr< MiniKanren.compose $clauses$ >>
+        (* let conjunctions = fold_left1
           (fun acc x -> <:expr< conj ($acc$) ($x$) >>)
           clauses
         in
-        <:expr< delay (fun () -> $conjunctions$) >>
+        <:expr< delay (fun () -> $conjunctions$) >> *)
       in
       let ans =
         let rec loop = function

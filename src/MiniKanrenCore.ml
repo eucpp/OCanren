@@ -1187,13 +1187,6 @@ module State =
       let i = (!!!x : inner_logic).index in
       (x,i)
 
-    let incr_scope ?e ({scope;} as st) =
-      (* let e' = match e with
-      | Some e -> e
-      | None   -> entry
-      in *)
-      {st with scope = new_scope ();(* entry = e' *)}
-
     let new_event e ({id; lastId; listener} as st) =
       incr lastId;
       let new_id = !lastId in
@@ -1202,6 +1195,10 @@ module State =
       | None -> ()
       end;
       new_id
+
+    let enter_conde {id; scope} as st =
+      let new_id = new_event Listener.Disj st in
+      {st with id = new_id; scope = new_scope () }
 
   end
 
@@ -1477,38 +1474,36 @@ let disj f g st = State.(
 
 let (|||) = disj
 
-(* "mplus*" *)
-let rec (?|) = function
-| []    -> failwith "wrong argument of ?|"
-| [h]   -> h
-| h::tl -> h ||| (?| tl)
-
-(* "bind*" *)
-let rec (?&) = function
-| []   -> failwith "wrong argument of ?&"
-| [h]  -> h
-| x::y::tl -> ?& ((x &&& y)::tl)
-
-let bind_star = (?&)
-
-let list_fold ~f ~initer xs =
+let list_fold_left1 ~f ~initer xs =
   match xs with
   | [] -> failwith "bad argument"
-  | start::xs -> ListLabels.fold_left ~init:(initer start) ~f xs
+  | x::xs -> ListLabels.fold_left ~init:(initer x) ~f xs
 
-let list_fold_right0 ~f ~initer xs =
+let list_fold_right1 ~f ~initer xs =
   let rec helper = function
   | [] -> failwith "bad_argument"
-  | x::xs -> list_fold ~initer ~f:(fun acc x -> f x acc) (x::xs)
+  | xs -> list_fold_left1 ~initer ~f xs
   in
   helper (List.rev xs)
 
-let conde: goal list -> goal =
-  let open State in fun xs st (*({entry;} as st)*) ->
-  let st = incr_scope (*~e:(LogEntry.make "conde" entry)*) st in
-  list_fold_right0 ~initer:(fun x -> x)
-    xs
-    ~f:(fun g acc st ->
-          MKStream.mplus (g st) @@ MKStream.inc (fun () -> acc st)
-      )
+(* "mplus*" *)
+let rec (?|) = fun xs st ->
+  let st = State.enter_conde st in
+  list_fold_right1 ~initer:(fun x -> x) xs
+    ~f:(fun acc g st ->
+      MKStream.mplus (g st) @@ MKStream.inc (fun () -> acc st)
+    )
   |> (fun g -> MKStream.inc (fun ()  -> g st))
+
+let conde = (?|)
+
+let (?&) =
+  let open State in fun xs st ->
+  let id = new_event Listener.Conj st in
+  list_fold_left1 ~initer:(fun x -> x) xs
+    ~f:(fun acc g st ->
+      MKStream.bind (acc {st with id=id}) (fun st -> g {st with id=id})
+    )
+  |> (fun g -> MKStream.inc (fun () -> g st))
+
+let compose = (?&)
