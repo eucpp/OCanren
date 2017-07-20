@@ -1201,7 +1201,7 @@ module State =
       | Some listener -> listener#on_event e id new_id
       | None -> ()
       end;
-      {st with id=new_id}
+      new_id
 
   end
 
@@ -1244,9 +1244,13 @@ module Fresh =
 
   end
 
-let success st = MKStream.single @@ State.new_event Listener.Success st
+let success st =
+  let _ = State.new_event Listener.Success st in
+  MKStream.single st
 
-let failure ~reason st = let _ = State.new_event (Listener.Failure reason) st in MKStream.nil
+let failure ~reason st =
+  let _ = State.new_event (Listener.Failure reason) st in
+  MKStream.nil
 
 exception FreeVarFound
 let has_free_vars is_var x =
@@ -1404,10 +1408,10 @@ module Trace =
 
     let trace n callback =
       let refiner, uncurrier, app, ext1, ext2 = n () in
-      let f g tup st =
+      let f g tup st = State.(
         let e = (uncurrier @@ callback) tup in
-        g (State.new_event e st)
-      in
+        g {st with id = State.new_event e st}
+      ) in
       refiner (
         fun tup ->
           let x, st = ext1 tup in
@@ -1459,15 +1463,17 @@ let delay : (unit -> goal) -> goal = fun g ->
 
 let inc : goal -> goal = fun g st -> MKStream.from_fun (fun () -> g st)
 
-let conj f g st =
-  let g' st = g (State.new_event Listener.Conj st) in
-  MKStream.bind (f st) g'
+let conj f g st = State.(
+  let id = new_event Listener.Conj st in
+  MKStream.bind (f {st with id=id}) (fun st -> g {st with id=id})
+)
 
 let (&&&) = conj
 
-let disj f g st =
-  let st = State.new_event Listener.Disj st in
+let disj f g st = State.(
+  let st = {st with id = new_event Listener.Disj st} in
   MKStream.mplus (f st) (MKStream.from_fun (fun () -> g st))
+)
 
 let (|||) = disj
 

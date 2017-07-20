@@ -30,5 +30,5 @@ let rec reverso a b =
 let _ =
   let logger = TreeLogger.create () in
   let stream = run ~listener:(logger :> Listener.t) q (fun q -> reverso q q) (fun qs -> qs) in
-  let _ = Stream.take ~n:1 stream in
+  let _ = Stream.take ~n:2 stream in
   logger#print Format.std_formatter
