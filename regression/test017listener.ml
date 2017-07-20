@@ -39,5 +39,5 @@ let filter = Listener.(function
 let _ =
   let logger = TreeLogger.create () in
   let stream = run ~listener:(logger :> Listener.t) q (fun q -> reverso q q) (fun qs -> qs) in
-  let _ = Stream.take ~n:5 stream in
+  let _ = Stream.take ~n:4 stream in
   logger#print ~filter Format.std_formatter

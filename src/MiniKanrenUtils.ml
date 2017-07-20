@@ -2,11 +2,13 @@ open MiniKanrenCore
 
 module TreeLogger =
   struct
+    type color = Green | Yellow | Red | White
+
     type node = { event : Listener.event; children : StateId.t list }
 
     module H = Hashtbl.Make(StateId)
 
-    let make_node e = { event = e; children = [] }
+    let make_node e = { event = e; children = []; }
 
     let default_filter = Listener.(function
       | Custom str -> not (String.equal "root" str)
@@ -14,7 +16,83 @@ module TreeLogger =
       | _ -> true
     )
 
-    let is_simple_conj tbl {event; children} = Listener.(
+    let color_of_event event cs = Listener.(
+      match event with
+      | Success     -> Green
+      | Failure _   -> Red
+      | Conj        ->
+        if (cs = []) then Yellow
+        else if List.for_all ((==) Green) cs then Green
+        else if List.exists ((==) Red) cs then Red
+        else if List.exists ((==) Yellow) cs then Yellow
+        else White
+      | Disj        ->
+        if (cs = []) then Yellow
+        else if List.for_all ((==) Red) cs then Red
+        else if List.exists ((==) Green) cs then Green
+        else if List.exists ((==) Yellow) cs then Yellow
+        else White
+      | Unif _      -> let [c] = cs in c
+      | Diseq _     -> let [c] = cs in c
+      | Goal (_, _) -> let [c] = cs in c
+      | Custom _    -> White
+    )
+
+    let color_str c str =
+      if c <> White then
+        let code = match c with
+          | Red     -> 31
+          | Green   -> 32
+          | Yellow  -> 33
+        in
+        Printf.sprintf "\027[%dm%s\027[0m" code str
+      else
+        str
+
+    type pnode = { str: string; pchildren: pnode list }
+
+    let is_leaf {pchildren} = (pchildren == [])
+
+    let is_foldable ps = List.for_all is_leaf ps
+
+    let pnode_of_event event c ps = Listener.(
+      match event with
+      | Conj when ps = [] ->
+        { str = color_str c "waiting..."; pchildren = [] }
+      | Disj when ps = [] ->
+        { str = color_str c "waiting..."; pchildren = [] }
+      | Conj when is_foldable ps ->
+        let str = "(" ^ (String.concat ") &&& (" @@ List.map (fun {str} -> str) ps) ^ ")" in
+        { str = str; pchildren = [] }
+      | Disj when is_foldable ps ->
+        let str = "(" ^ (String.concat ") ||| (" @@ List.map (fun {str} -> str) ps) ^ ")" in
+        { str = str; pchildren = [] }
+      | _ -> {str = color_str c @@ string_of_event event; pchildren = ps }
+    )
+
+    let to_ptree : (Listener.event -> bool) -> Listener.event -> (color * (pnode list)) list -> color * (pnode list) =
+      fun filter event children ->
+        let colors = List.map fst children in
+        let ps = List.concat @@ List.map snd children in
+        let c = color_of_event event colors in
+        if (filter event) then
+          (c, [pnode_of_event event c ps])
+        else
+          (c, ps)
+
+    let rec print_ptree ff roots =
+      let rec helper {str; pchildren} =
+        Format.fprintf ff "@[<v 2>%s" str;
+        print_children pchildren;
+        Format.fprintf ff "@]"
+      and print_children = function
+        | [] -> (*Format.fprintf ff "@;"*) ()
+        | xs -> List.iter (fun x -> Format.fprintf ff "@;"; helper x) xs;
+      in
+      print_children roots;
+      Format.fprintf ff "@;"
+
+    (* let is_simple_conj tbl {event; children} = Listener.(
       let are_simple_children = List.for_all (fun id ->
         match (H.find tbl id).event with
         | Unif _  -> true
@@ -24,11 +102,12 @@ module TreeLogger =
       match event with
       | Conj -> (List.length children > 0) && (are_simple_children children)
       | _    -> false
-    )
+    ) *)
 
     class type t = object
       method init: StateId.t -> unit
       method on_event: Listener.event -> StateId.t -> StateId.t -> unit
+      method fold : 'a. (Listener.event -> 'a list -> 'a) -> 'a
       method print: ?filter:(Listener.event -> bool) -> Format.formatter -> unit
     end
 
@@ -49,8 +128,23 @@ module TreeLogger =
         let parent = H.find tbl pid in
         H.replace tbl pid { parent with children = id :: parent.children }
 
+      method fold : 'a. (Listener.event -> 'a list -> 'a) -> 'a = fun f ->
+        let rec helper id =
+          let {event; children} = H.find tbl id in
+          f event @@ List.map helper (List.rev children)
+        in
+        match !root with
+        | Some root -> helper root
+        | None -> raise (Invalid_argument "Empty tree")
+
       method print ?(filter = default_filter) ff =
-        let rec helper ?(break=false) ({event; children} as node) =
+        match !root with
+        | Some root ->
+          let _,proots = self#fold (to_ptree filter) in
+          print_ptree ff proots
+          (* helper @@ H.find tbl root; Format.fprintf ff "@;"; *)
+        | None -> ()
+        (* let rec helper ?(break=false) ({event; children} as node) =
           let print_child ?(break=false) childId =
             helper ~break @@ H.find tbl childId
           in
@@ -85,6 +179,6 @@ module TreeLogger =
         in
         match !root with
         | Some root -> helper @@ H.find tbl root; Format.fprintf ff "@;";
-        | None -> ()
+        | None -> () *)
     end
   end
