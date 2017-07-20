@@ -1,6 +1,6 @@
 open MiniKanrenCore
 
-module Logging =
+module TreeLogger =
   struct
     type node = { event : Listener.event; children : StateId.t list }
 
@@ -8,17 +8,25 @@ module Logging =
 
     module H = Hashtbl.Make(StateId)
 
-    class tree = object
+    class type t = object
+      method init: StateId.t -> unit
+      method on_event: Listener.event -> StateId.t -> StateId.t -> unit
+      method print: ?filter:(Listener.event -> bool) -> Format.formatter -> unit
+    end
+
+    let create () = object
       val tbl : node H.t = H.create 31
       val root : StateId.t option ref = ref None
 
       method init id =
+        Printf.printf "%s %s\n" (Listener.string_of_event @@ Listener.Custom "root") (StateId.show id);
         H.reset tbl;
         root := Some id;
         H.add tbl id @@ make_node (Listener.Custom "root")
 
       (** [on_event e parentId id ] creates new node in the tree *)
       method on_event e pid id =
+        Printf.printf "%s %s %s\n" (Listener.string_of_event e) (StateId.show pid) (StateId.show id);
         let node = H.add tbl id @@ make_node e in
         let parent = H.find tbl pid in
         H.replace tbl pid { parent with children = id :: parent.children }
@@ -47,6 +55,5 @@ module Logging =
         match !root with
         | Some root -> Format.fprintf ff "%a@;" helper @@ H.find tbl root
         | None -> ()
-
     end
   end

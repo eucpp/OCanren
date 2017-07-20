@@ -1,9 +1,9 @@
 open MiniKanrenCore
 
-module Logging :
+module TreeLogger :
   sig
     (** Tree logger - builds a search tree *)
-    class type tree = object
+    class type t = object
       (** [init id] initializes tree *)
       method init: StateId.t -> unit
 
@@ -14,4 +14,6 @@ module Logging :
           [filter] is an optional function argument that can be used to select only interesting nodes *)
       method print: ?filter:(Listener.event -> bool) -> Format.formatter -> unit
     end
+
+    val create : unit -> t
   end

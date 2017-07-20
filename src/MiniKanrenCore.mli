@@ -97,6 +97,7 @@ module StateId :
     type t
     val hash  : t -> int
     val equal : t -> t -> bool
+    val show : t -> string
   end
 
 (** Goal converts a state into a lazy stream of states *)
@@ -181,10 +182,18 @@ val call_fresh : (('a, 'b) injected -> goal) -> goal
 val report_counters : unit -> unit
 
 (** [x === y] creates a goal, which performs a unification of [x] and [y] *)
-val (===) : ?p:('a, 'b) printer -> ('a, 'b logic) injected -> ('a, 'b logic) injected -> goal
+val (===) : ('a, 'b logic) injected -> ('a, 'b logic) injected -> goal
+
+(** [unify ~p x y] same as (x === y) but allows to pass a printer for unified terms.
+    When [p] is not omitted the string representations of terms are included to the listenable event *)
+val unify : ?p:('a, 'b logic) printer -> ('a, 'b logic) injected -> ('a, 'b logic) injected -> goal
 
 (** [x =/= y] creates a goal, which introduces a disequality constraint for [x] and [y] *)
-val (=/=) : ?p:('a, 'b) printer -> ('a, 'b logic) injected -> ('a, 'b logic) injected -> goal
+val (=/=) : ('a, 'b logic) injected -> ('a, 'b logic) injected -> goal
+
+(** [diseq ~p x y] same as (x =/= y) but allows to pass a printer for terms.
+    When [p] is not omitted the string representations of terms are included to the listenable event *)
+val diseq : ?p:('a, 'b logic) printer -> ('a, 'b logic) injected -> ('a, 'b logic) injected -> goal
 
 (** [conj s1 s2] creates a goal, which is a conjunction of its arguments *)
 val conj : goal -> goal -> goal
@@ -280,8 +289,8 @@ module Listener :
     - [run two        (fun q r -> q === !!5 ||| r === !!6) (fun qs rs -> ]{i here [qs], [rs] --- streams of all values, associated with the variable [q] and [r], respectively}[)]
     - [run (succ one) (fun q r -> q === !!5 ||| r === !!6) (fun qs rs -> ]{i the same as the above}[)]
  *)
-val run : (unit -> ('a -> 'c goal') * ('d -> 'e -> 'f) *
-                      (('g Stream.t -> 'h -> 'e) * ('c -> 'h * MKStream.t))) ->
+val run : ?listener:Listener.t ->
+          (unit -> ('a -> 'c goal') * ('d -> 'e -> 'f) * (('g Stream.t -> 'h -> 'e) * ('c -> 'h * MKStream.t))) ->
           'a -> 'd -> 'f
 
 (**

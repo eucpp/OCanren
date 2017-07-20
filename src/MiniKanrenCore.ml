@@ -1106,6 +1106,7 @@ module StateId =
     type t = int
     let hash = Hashtbl.hash
     let equal = (==)
+    let show = string_of_int
   end
 
 module Listener =
@@ -1159,14 +1160,20 @@ module State =
       }
 
     let empty ?listener () =
-      { id      = 0
-      ; env     = Env.empty ()
-      ; subst   = Subst.empty
-      ; ctrs    = Constraints.empty
-      ; scope   = new_scope ()
-      ; lastId  = ref 0
+      let id = 0 in
+      begin match listener with
+      | Some listener -> listener#init id
+      | None -> ()
+      end;
+      { id        = id
+      ; env       = Env.empty ()
+      ; subst     = Subst.empty
+      ; ctrs      = Constraints.empty
+      ; scope     = new_scope ()
+      ; lastId    = ref id
       ; listener  = listener
       }
+
 
     let env   {env;} = env
     let subst {subst;} = subst
@@ -1359,9 +1366,9 @@ let qrs   = three
 let qrst  = four
 let pqrst = five
 
-let run n goalish f =
+let run ?listener n goalish f =
   let adder, currier, app_num = n () in
-  let run f = f (State.empty ()) in
+  let run f = f (State.empty ?listener ()) in
   run (adder goalish) |> ApplyLatest.apply app_num |> (currier f)
 
 module Refiner =
@@ -1413,13 +1420,13 @@ module Trace =
       | Some p -> Some (p x, p y)
       | None   -> None
 
-    let unif ?p x y = Listener.Unif (print_pair x y)
-    let diseq ?p x y = Listener.Diseq (print_pair x y)
+    let unif ?p x y = Listener.Unif (print_pair ?p x y)
+    let diseq ?p x y = Listener.Diseq (print_pair ?p x y)
 
   end
 
-let (===) ?p (x: _ injected) y =
-  Trace.(trace two @@ unif ~p) x y (
+let unify ?p (x: _ injected) y =
+  Trace.(trace two @@ unif ?p) x y (
     let open State in fun {env; subst; ctrs; scope} as st ->
     match Subst.unify env x y scope subst with
     | None -> failure ~reason:"Unification failed" st
@@ -1431,8 +1438,10 @@ let (===) ?p (x: _ injected) y =
           failure ~reason:"Disequality constraints violated" st
   )
 
-let (=/=) ?p x y =
-  Trace.(trace two @@ diseq ~p) x y (
+let (===) x y = unify x y
+
+let diseq ?p x y =
+  Trace.(trace two @@ diseq ?p) x y (
     let open State in fun {env; subst; ctrs; scope} as st ->
     (* For disequalities we unify in non-local scope to prevent defiling *)
     match Subst.unify env x y non_local_scope subst with
@@ -1443,14 +1452,16 @@ let (=/=) ?p x y =
         success {st with ctrs=ctrs'}
   )
 
+let (=/=) x y = diseq x y
+
 let delay : (unit -> goal) -> goal = fun g ->
   fun st -> MKStream.from_fun (fun () -> g () st)
 
 let inc : goal -> goal = fun g st -> MKStream.from_fun (fun () -> g st)
 
 let conj f g st =
-  let st = State.new_event Listener.Conj st in
-  MKStream.bind (f st) g
+  let g' st = g (State.new_event Listener.Conj st) in
+  MKStream.bind (f st) g'
 
 let (&&&) = conj
 
