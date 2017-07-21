@@ -270,6 +270,7 @@ module Listener :
       | Unif of (string * string) option
       | Diseq of (string * string) option
       | Goal of string * string list
+      | Answer of string * string list
       | Custom of string
 
     val string_of_event : event -> string

@@ -1119,6 +1119,7 @@ module Listener =
       | Unif of (string * string) option
       | Diseq of (string * string) option
       | Goal of string * string list
+      | Answer of string * string list
       | Custom of string
 
     let string_of_event = function
@@ -1127,6 +1128,7 @@ module Listener =
     | Conj                -> "&&&"
     | Disj                -> "conde"
     | Goal (name, args)   -> sprintf "%s %s" name @@ String.concat " " args
+    | Answer (name, args) -> sprintf "answer %s %s" name @@ String.concat " " args
     | Custom str          -> str
     | Unif args           ->
       begin match args with

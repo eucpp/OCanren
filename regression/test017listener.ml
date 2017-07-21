@@ -14,6 +14,8 @@ let rec appendo a b ab =
         (unify ~p (h%ab') ab)
         (appendo t b ab')
     ]
+  (* &&&
+    ((Trace.(trace three)) (fun q r s -> Listener.Answer ("appendo", [p q; p r; p s])) a b ab success) *)
   )
 
 let rec reverso a b =
@@ -25,19 +27,12 @@ let rec reverso a b =
         (appendo a' !<h b)
         (defer (reverso t a'))
     ]
+  (* &&&
+    ((Trace.(trace two)) (fun q r -> Listener.Answer ("reverso", [p q; p r])) a b success) *)
   )
-
-let filter = Listener.(function
-  | Goal (_, _) -> true
-  | Unif _  -> true
-  | Diseq _ -> true
-  | Disj    -> true
-  | Conj    -> true
-  | _ -> false
-)
 
 let _ =
   let logger = TreeLogger.create () in
   let stream = run ~listener:(logger :> Listener.t) q (fun q -> reverso q q) (fun qs -> qs) in
   let _ = Stream.take ~n:4 stream in
-  logger#print ~filter Format.std_formatter
+  logger#print Format.std_formatter

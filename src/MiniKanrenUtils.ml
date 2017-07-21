@@ -35,6 +35,7 @@ module TreeLogger =
       | Unif _      -> let [c] = cs in c
       | Diseq _     -> let [c] = cs in c
       | Goal (_, _) -> let [c] = cs in c
+      | Answer _    -> Green
       | Custom _    -> White
     )
 
@@ -56,18 +57,19 @@ module TreeLogger =
     let is_foldable ps = List.for_all is_leaf ps
 
     let pnode_of_event event c ps = Listener.(
+      let fc = color_str c in
       match event with
       | Conj when ps = [] ->
-        { str = color_str c "waiting..."; pchildren = [] }
+        (c, [])
       | Disj when ps = [] ->
-        { str = color_str c "waiting..."; pchildren = [] }
+        (c, [])
       | Conj when is_foldable ps ->
-        let str = "(" ^ (String.concat ") &&& (" @@ List.map (fun {str} -> str) ps) ^ ")" in
-        { str = str; pchildren = [] }
+        let str = (fc "(") ^ (String.concat (fc ") &&& (") @@ List.map (fun {str} -> str) ps) ^ (fc ")") in
+        (c, [{ str = str; pchildren = [] }])
       | Disj when is_foldable ps ->
-        let str = "(" ^ (String.concat ") ||| (" @@ List.map (fun {str} -> str) ps) ^ ")" in
-        { str = str; pchildren = [] }
-      | _ -> {str = color_str c @@ string_of_event event; pchildren = ps }
+        let str = (fc "(") ^ (String.concat (fc ") ||| (") @@ List.map (fun {str} -> str) ps) ^ (fc ")") in
+        (c, [{ str = str; pchildren = [] }])
+      | _ -> (c, [{str = color_str c @@ string_of_event event; pchildren = ps }])
     )
 
     let to_ptree : (Listener.event -> bool) -> Listener.event -> (color * (pnode list)) list -> color * (pnode list) =
@@ -76,7 +78,7 @@ module TreeLogger =
         let ps = List.concat @@ List.map snd children in
         let c = color_of_event event colors in
         if (filter event) then
-          (c, [pnode_of_event event c ps])
+          pnode_of_event event c ps
         else
           (c, ps)
 
