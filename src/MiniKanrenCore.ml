@@ -1116,6 +1116,7 @@ module Listener =
       | Failure of string
       | Conj
       | Disj
+      | Cont of StateId.t
       | Unif of (string * string) option
       | Diseq of (string * string) option
       | Goal of string * string list
@@ -1127,6 +1128,7 @@ module Listener =
     | Failure reason      -> sprintf "failure: %s" reason
     | Conj                -> "&&&"
     | Disj                -> "conde"
+    | Cont id             -> sprintf "{%s}" @@ StateId.show id
     | Goal (name, args)   -> sprintf "%s %s" name @@ String.concat " " args
     | Answer (name, args) -> sprintf "answer %s %s" name @@ String.concat " " args
     | Custom str          -> str
@@ -1189,11 +1191,12 @@ module State =
       let i = (!!!x : inner_logic).index in
       (x,i)
 
-    let new_event e ({id; lastId; listener} as st) =
+    let new_event ?pid e ({id; lastId; listener} as st) =
       incr lastId;
+      let pid = match pid with Some pid -> pid | None -> id in
       let new_id = !lastId in
       begin match listener with
-      | Some listener -> listener#on_event e id new_id
+      | Some listener -> listener#on_event e pid new_id
       | None -> ()
       end;
       new_id
@@ -1462,9 +1465,15 @@ let delay : (unit -> goal) -> goal = fun g ->
 
 let inc : goal -> goal = fun g st -> MKStream.from_fun (fun () -> g st)
 
+let make_cont g pid =
+  let open State in fun ({id} as st) ->
+  let cont_id = new_event ~pid (Listener.Cont id) st in
+  g {st with id=cont_id}
+
 let conj f g st = State.(
   let id = new_event Listener.Conj st in
-  MKStream.bind (f {st with id=id}) (fun st -> g {st with id=id})
+  let st = {st with id=id} in
+  MKStream.bind (f st) (make_cont g id)
 )
 
 let (&&&) = conj
@@ -1488,6 +1497,17 @@ let list_fold_right1 ~f ~initer xs =
   in
   helper (List.rev xs)
 
+let (?&) =
+  let open State in fun xs st ->
+  let id = new_event Listener.Conj st in
+  list_fold_left1 ~initer:(fun x -> x) xs
+    ~f:(fun acc g st ->
+      MKStream.bind (acc {st with id=id}) (make_cont g id)
+    )
+  |> (fun g -> MKStream.inc (fun () -> g st))
+
+let compose = (?&)
+
 (* "mplus*" *)
 let rec (?|) = fun xs st ->
   let st = State.enter_conde st in
@@ -1498,14 +1518,3 @@ let rec (?|) = fun xs st ->
   |> (fun g -> MKStream.inc (fun ()  -> g st))
 
 let conde = (?|)
-
-let (?&) =
-  let open State in fun xs st ->
-  let id = new_event Listener.Conj st in
-  list_fold_left1 ~initer:(fun x -> x) xs
-    ~f:(fun acc g st ->
-      MKStream.bind (acc {st with id=id}) (fun st -> g {st with id=id})
-    )
-  |> (fun g -> MKStream.inc (fun () -> g st))
-
-let compose = (?&)

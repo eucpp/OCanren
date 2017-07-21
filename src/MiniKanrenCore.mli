@@ -267,6 +267,7 @@ module Listener :
       | Failure of string
       | Conj
       | Disj
+      | Cont of StateId.t
       | Unif of (string * string) option
       | Diseq of (string * string) option
       | Goal of string * string list
