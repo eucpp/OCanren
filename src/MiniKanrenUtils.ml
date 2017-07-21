@@ -2,7 +2,7 @@ open MiniKanrenCore
 
 module TreeLogger =
   struct
-    type color = Green | Yellow | Red | White
+    type color = Green | BGreen | Yellow | Red | White
 
     type node = { event : Listener.event; children : StateId.t list }
 
@@ -27,27 +27,32 @@ module TreeLogger =
       | Failure _   -> Red
       | Conj        ->
         if (cs = []) then Yellow
-        else if List.for_all ((==) Green) cs then Green
+        else if List.for_all (fun c -> c == Green || c == BGreen) cs then (
+          if List.exists ((==) BGreen) cs then BGreen else Green
+        )
         else if List.exists ((==) Red) cs then Red
         else if List.exists ((==) Yellow) cs then Yellow
         else White
       | Disj        ->
         if (cs = []) then Yellow
         else if List.for_all ((==) Red) cs then Red
-        else if List.exists ((==) Green) cs then Green
+        else if List.exists (fun c -> c == Green || c == BGreen) cs then Green
         else if List.exists ((==) Yellow) cs then Yellow
         else White
       | Cont _      ->
         if (cs = []) then Yellow
         else if List.for_all ((==) Red) cs then Red
-        else if List.exists ((==) Green) cs then Green
+        else if List.exists (fun c -> c == Green || c == BGreen) cs then (
+          (* if List.exists ((==) BGreen) cs then BGreen else Green *)
+          Green
+        )
         else if List.exists ((==) Yellow) cs then Yellow
         else White
       | Unif _      -> let [c] = cs in c
       | Diseq _     -> let [c] = cs in c
       | Goal (_, _) -> let [c] = cs in c
       (* | Cont _      -> let [c] = cs in c *)
-      | Answer _    -> Green
+      | Answer _    -> BGreen
       (* | Custom _    -> White *)
       | _           -> White
     )
@@ -58,12 +63,13 @@ module TreeLogger =
           | Red     -> 31
           | Green   -> 32
           | Yellow  -> 33
+          | BGreen  -> 42
         in
         Printf.sprintf "\027[%dm%s\027[0m" code str
       else
         str
 
-    type box = { id: StateId.t ; str: string; c: color; inner: box list; with_id: bool }
+    type box = { id: StateId.t ; str: string; c: color; inner: box list; with_id: bool; with_sep: string option }
 
     (* let make_box ?str ?() *)
 
@@ -94,17 +100,21 @@ module TreeLogger =
         { c=c; boxes=[] }
       | Conj ->
         let boxes = fold_boxes boxes in
+        (* if List.length boxes = 1 then
+          (* let box = { id; str; c; inner=boxes; with_id=false } in *)
+          { c; boxes }
+        else  *)
         if List.for_all is_leaf boxes then
           let ids = List.map (fun {id} -> id) boxes in
           let id  = list_max ids in
           let str = "(" ^ (String.concat ") &&& (" @@ List.map (fun {str} -> str) boxes) ^ ")" in
           (* let str = Printf.sprintf "{%s} %s" (StateId.show id) str in *)
-          let box = { id; str; c; inner=[]; with_id=true } in
+          let box = { id; str; c; inner=[]; with_id=true; with_sep=(Some "&&&") } in
           { c; boxes=[box] }
         else
           (* let str = "&&&" in *)
           let str = "" in
-          let box = { id; str; c; inner=boxes; with_id=true } in
+          let box = { id; str; c; inner=boxes; with_id=true; with_sep=None } in
           { c; boxes=[box] }
       | Disj ->
         (* if List.for_all is_leaf boxes then
@@ -113,23 +123,23 @@ module TreeLogger =
           { c; boxes=[box] }
         else *)
           let str = "conde" in
-          let box = { id; str; c; inner=boxes; with_id=true } in
+          let box = { id; str; c; inner=boxes; with_id=true; with_sep=None } in
           { c; boxes=[box] }
       | Cont id ->
         let str = Printf.sprintf "{%s}" (StateId.show id) in
-        let box = { id; str; c; inner=boxes; with_id=false } in
+        let box = { id; str; c; inner=boxes; with_id=false; with_sep=None } in
         { c; boxes=[box] }
       | Unif _  ->
         let str = string_of_event event in
-        let box = { id; str; c; inner=[]; with_id=true } in
+        let box = { id; str; c; inner=[]; with_id=true; with_sep=None } in
         { c; boxes=[box] }
       | Diseq _  ->
         let str = string_of_event event in
-        let box = { id; str; c; inner=[]; with_id=true } in
+        let box = { id; str; c; inner=[]; with_id=true; with_sep=None } in
         { c; boxes=[box] }
       | _ ->
         let str = string_of_event event in
-        let box = { id; str; c; inner=boxes; with_id=true } in
+        let box = { id; str; c; inner=boxes; with_id=true; with_sep=None } in
         { c; boxes=[box] }
     )
 

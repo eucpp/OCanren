@@ -1130,7 +1130,7 @@ module Listener =
     | Disj                -> "conde"
     | Cont id             -> sprintf "{%s}" @@ StateId.show id
     | Goal (name, args)   -> sprintf "%s %s" name @@ String.concat " " args
-    | Answer (name, args) -> sprintf "answer %s %s" name @@ String.concat " " args
+    | Answer (name, args) -> sprintf "%s %s" name @@ String.concat " " args
     | Custom str          -> str
     | Unif args           ->
       begin match args with
