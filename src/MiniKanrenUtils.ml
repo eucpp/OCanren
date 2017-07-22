@@ -69,11 +69,16 @@ module TreeLogger =
       else
         str
 
-    type box = { id: StateId.t ; str: string; c: color; inner: box list; with_id: bool; with_sep: string option }
+    type box =
+      { id: StateId.t
+      ; str: string
+      ; c: color
+      ; inner: box list
+      ; with_id: bool
+      ; answers: (string * StateId.t) list
+      }
 
-    (* let make_box ?str ?() *)
-
-    type pinfo = { c: color; boxes: box list }
+    type pinfo = { c: color; boxes: box list; answers: (string * StateId.t) list }
 
     let is_leaf {inner} = (inner == [])
 
@@ -91,13 +96,14 @@ module TreeLogger =
 
     let make_pinfo (id, event) children = Listener.(
       let boxes = List.concat @@ List.map (fun {boxes} -> boxes) children in
+      let answers = List.concat @@ List.map (fun {answers} -> answers) children in
       let colors = List.map (fun {c} -> c) children in
       let c = color_of_event event colors in
       match event with
       | Conj when boxes = [] ->
-        { c=c; boxes=[] }
+        { c=c; boxes=[]; answers }
       | Disj when boxes = [] ->
-        { c=c; boxes=[] }
+        { c=c; boxes=[]; answers }
       | Conj ->
         let boxes = fold_boxes boxes in
         (* if List.length boxes = 1 then
@@ -109,13 +115,13 @@ module TreeLogger =
           let id  = list_max ids in
           let str = "(" ^ (String.concat ") &&& (" @@ List.map (fun {str} -> str) boxes) ^ ")" in
           (* let str = Printf.sprintf "{%s} %s" (StateId.show id) str in *)
-          let box = { id; str; c; inner=[]; with_id=true; with_sep=(Some "&&&") } in
-          { c; boxes=[box] }
+          let box = { id; str; c; inner=[]; with_id=true; answers=[] } in
+          { c; boxes=[box]; answers }
         else
           (* let str = "&&&" in *)
-          let str = "" in
-          let box = { id; str; c; inner=boxes; with_id=true; with_sep=None } in
-          { c; boxes=[box] }
+          let str = "&&&" in
+          let box = { id; str; c; inner=boxes; with_id=false; answers=[] } in
+          { c; boxes=[box]; answers }
       | Disj ->
         (* if List.for_all is_leaf boxes then
           let str = "(" ^ (String.concat ") ||| (" @@ List.map (fun {str} -> str) boxes) ^ ")" in
@@ -123,24 +129,34 @@ module TreeLogger =
           { c; boxes=[box] }
         else *)
           let str = "conde" in
-          let box = { id; str; c; inner=boxes; with_id=true; with_sep=None } in
-          { c; boxes=[box] }
+          let box = { id; str; c; inner=boxes; with_id=false; answers=[] } in
+          { c; boxes=[box]; answers }
       | Cont id ->
-        let str = Printf.sprintf "{%s}" (StateId.show id) in
-        let box = { id; str; c; inner=boxes; with_id=false; with_sep=None } in
-        { c; boxes=[box] }
+        if boxes<>[] then
+          let str = Printf.sprintf "{%s}" (StateId.show id) in
+          let box = { id; str; c; inner=boxes; with_id=false; answers=[] } in
+          { c; boxes=[box]; answers }
+        else
+          { c; boxes=[]; answers }
       | Unif _  ->
         let str = string_of_event event in
-        let box = { id; str; c; inner=[]; with_id=true; with_sep=None } in
-        { c; boxes=[box] }
+        let box = { id; str; c; inner=[]; with_id=true; answers=[] } in
+        { c; boxes=[box]; answers=[] }
       | Diseq _  ->
         let str = string_of_event event in
-        let box = { id; str; c; inner=[]; with_id=true; with_sep=None } in
-        { c; boxes=[box] }
+        let box = { id; str; c; inner=[]; with_id=true; answers=[] } in
+        { c; boxes=[box]; answers=[] }
+      | Answer (_, answ) ->
+        let answer = (String.concat " " answ, id) in
+        { c; boxes=[]; answers=[answer] }
+      | Goal (_, _) ->
+        let str = string_of_event event in
+        let box = { id; str; c; inner=boxes; with_id=true; answers } in
+        { c; boxes=[box]; answers=[] }
       | _ ->
         let str = string_of_event event in
-        let box = { id; str; c; inner=boxes; with_id=true; with_sep=None } in
-        { c; boxes=[box] }
+        let box = { id; str; c; inner=boxes; with_id=true; answers=[] } in
+        { c; boxes=[box]; answers }
     )
 
     let to_ptree : (StateId.t * Listener.event -> bool) -> StateId.t * Listener.event -> pinfo list -> pinfo =
@@ -153,15 +169,20 @@ module TreeLogger =
         else
           let c = color_of_event event (List.map (fun {c} -> c) children) in
           let boxes = List.concat @@ List.map (fun {boxes} -> boxes) children in
-          { c; boxes }
+          let answers = List.concat @@ List.map (fun {answers} -> answers) children in
+          { c; boxes; answers }
           (* (id, c, ps) *)
 
     let rec print_ptree ff roots =
-      let rec helper {id; c; str; inner; with_id} =
+      let rec helper {id; c; str; inner; with_id; answers } =
         if with_id then
           Format.fprintf ff "@[<v 2>%s" @@ color_str c (Printf.sprintf "{%s} %s" (StateId.show id) str)
         else
           Format.fprintf ff "@[<v 2>%s" @@ color_str c str;
+        if answers <> [] then
+          print_answers c answers
+        else
+          ();
         print_inner ~break:(true) inner;
         Format.fprintf ff "@]"
       and print_inner ?(break=false) = function
@@ -173,6 +194,14 @@ module TreeLogger =
           if break then Format.fprintf ff "@;" else ();
           helper x;
           List.iter (fun x -> Format.fprintf ff "@;"; helper x) xs;
+      and print_answers c = function
+        | [] -> ()
+        | xs ->
+          let print_answer (answ, id) =
+            Format.fprintf ff "@;%s" @@ color_str c (Printf.sprintf "{%s} %s" (StateId.show id) answ)
+          in
+          Format.fprintf ff "@;%s" @@ color_str c "Answers:";
+          List.iter print_answer xs
       in
       print_inner roots;
       Format.fprintf ff "@;"

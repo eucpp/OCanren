@@ -16,6 +16,8 @@ let rec appendo a b ab =
         (appendo t b ab')
         (* (trace_answ) *)
     ]
+    &&&
+      (trace_answ)
   )
 
 let rec reverso a b =
@@ -29,6 +31,8 @@ let rec reverso a b =
         (defer (reverso t a'))
         (* (trace_answ) *)
     ]
+    &&&
+      (trace_answ)
   )
 
 let f a b = (a === b) &&& (b === !!1)
