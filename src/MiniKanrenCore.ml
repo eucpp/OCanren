@@ -1106,6 +1106,7 @@ module StateId =
     type t = int
     let hash = Hashtbl.hash
     let equal = (==)
+    let compare = compare
     let show = string_of_int
   end
 

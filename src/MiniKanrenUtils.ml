@@ -17,10 +17,6 @@ module TreeLogger =
       | _ -> true
     )
 
-    (* let terminal_ids : StateId.t * Listener.event -> StateId.t list list -> StateId.t list =
-      fun (id, event) ids -> match event with
-      | S ->  *)
-
     let color_of_event event cs = Listener.(
       match event with
       | Success     -> Green
@@ -75,8 +71,12 @@ module TreeLogger =
       ; c: color
       ; inner: box list
       ; with_id: bool
+      ; link : StateId.t option
       ; answers: (string * StateId.t) list
       }
+
+    let make_box ?(inner=[]) ?(with_id=true) ?(link=None) ?(answers=[]) id str c =
+      { id; str; c; inner; with_id; link; answers }
 
     type pinfo = { c: color; boxes: box list; answers: (string * StateId.t) list }
 
@@ -115,12 +115,12 @@ module TreeLogger =
           let id  = list_max ids in
           let str = "(" ^ (String.concat ") &&& (" @@ List.map (fun {str} -> str) boxes) ^ ")" in
           (* let str = Printf.sprintf "{%s} %s" (StateId.show id) str in *)
-          let box = { id; str; c; inner=[]; with_id=true; answers=[] } in
+          let box = make_box id str c in
           { c; boxes=[box]; answers }
         else
           (* let str = "&&&" in *)
           let str = "&&&" in
-          let box = { id; str; c; inner=boxes; with_id=false; answers=[] } in
+          let box = make_box id str c ~with_id:false ~inner:boxes in
           { c; boxes=[box]; answers }
       | Disj ->
         (* if List.for_all is_leaf boxes then
@@ -129,33 +129,32 @@ module TreeLogger =
           { c; boxes=[box] }
         else *)
           let str = "conde" in
-          let box = { id; str; c; inner=boxes; with_id=false; answers=[] } in
+          let box = make_box id str c ~inner:boxes ~with_id:false in
           { c; boxes=[box]; answers }
       | Cont id ->
         if boxes<>[] then
-          let str = Printf.sprintf "{%s}" (StateId.show id) in
-          let box = { id; str; c; inner=boxes; with_id=false; answers=[] } in
+          let box = make_box id "continue" c ~inner:boxes ~with_id:false ~link:(Some id) in
           { c; boxes=[box]; answers }
         else
           { c; boxes=[]; answers }
       | Unif _  ->
         let str = string_of_event event in
-        let box = { id; str; c; inner=[]; with_id=true; answers=[] } in
+        let box = make_box id str c in
         { c; boxes=[box]; answers=[] }
       | Diseq _  ->
         let str = string_of_event event in
-        let box = { id; str; c; inner=[]; with_id=true; answers=[] } in
+        let box = make_box id str c in
         { c; boxes=[box]; answers=[] }
       | Answer (_, answ) ->
         let answer = (String.concat " " answ, id) in
         { c; boxes=[]; answers=[answer] }
       | Goal (_, _) ->
         let str = string_of_event event in
-        let box = { id; str; c; inner=boxes; with_id=true; answers } in
+        let box = make_box id str c ~inner:boxes ~answers in
         { c; boxes=[box]; answers=[] }
       | _ ->
         let str = string_of_event event in
-        let box = { id; str; c; inner=boxes; with_id=true; answers=[] } in
+        let box = make_box id str c ~inner:boxes in
         { c; boxes=[box]; answers }
     )
 
@@ -173,12 +172,31 @@ module TreeLogger =
           { c; boxes; answers }
           (* (id, c, ps) *)
 
-    let rec print_ptree ff roots =
-      let rec helper {id; c; str; inner; with_id; answers } =
+    let make_labels : box list -> int H.t = fun boxes ->
+      let module S = Set.Make(StateId) in
+      let ordered = ref S.empty in
+      let rec helper {id; inner; with_id; link} =
         if with_id then
-          Format.fprintf ff "@[<v 2>%s" @@ color_str c (Printf.sprintf "{%s} %s" (StateId.show id) str)
-        else
-          Format.fprintf ff "@[<v 2>%s" @@ color_str c str;
+          ordered := S.add id !ordered
+        else if link <> None then
+          let Some id = link in
+          ordered := S.add id !ordered
+        else ();
+        List.iter helper inner
+      in
+      List.iter helper boxes;
+      let i = ref 0 in
+      let tbl = H.create 31 in
+      S.iter (fun id -> incr i; H.add tbl id !i) !ordered;
+      tbl
+
+    let print_ptree ff labels roots =
+      let rec helper {id; c; str; inner; with_id; link; answers } =
+        let str_of_id id = Printf.sprintf "{%d} " (H.find labels id) in
+        let str_id = if with_id then str_of_id id else "" in
+        let str_link = if link<>None then (let Some id = link in str_of_id id) else "" in
+        let cstr = color_str c @@ Printf.sprintf "%s%s %s" str_id str str_link in
+        Format.fprintf ff "@[<v 2>%s" @@ cstr;
         if answers <> [] then
           print_answers c answers
         else
@@ -186,7 +204,7 @@ module TreeLogger =
         print_inner ~break:(true) inner;
         Format.fprintf ff "@]"
       and print_inner ?(break=false) = function
-        | []    -> (*Format.fprintf ff "@;"*) ()
+        | []    -> ()
         | [x]   ->
           if break then Format.fprintf ff "@;" else ();
           helper x
@@ -198,25 +216,17 @@ module TreeLogger =
         | [] -> ()
         | xs ->
           let print_answer (answ, id) =
-            Format.fprintf ff "@;%s" @@ color_str c (Printf.sprintf "{%s} %s" (StateId.show id) answ)
+            let label =
+              try H.find labels id
+              with Not_found -> 0
+            in
+            Format.fprintf ff "@;%s" @@ color_str c (Printf.sprintf "{%d} %s" label answ)
           in
           Format.fprintf ff "@;%s" @@ color_str c "Answers:";
           List.iter print_answer xs
       in
       print_inner roots;
       Format.fprintf ff "@;"
-
-    (* let is_simple_conj tbl {event; children} = Listener.(
-      let are_simple_children = List.for_all (fun id ->
-        match (H.find tbl id).event with
-        | Unif _  -> true
-        | Diseq _ -> true
-        | _ -> false
-      ) in
-      match event with
-      | Conj -> (List.length children > 0) && (are_simple_children children)
-      | _    -> false
-    ) *)
 
     class type t = object
       method init: StateId.t -> unit
@@ -230,14 +240,11 @@ module TreeLogger =
       val root : StateId.t option ref = ref None
 
       method init id =
-        (* Printf.printf "%s %s\n" (Listener.string_of_event @@ Listener.Custom "root") (StateId.show id); *)
         H.reset tbl;
         root := Some id;
         H.add tbl id @@ make_node (Listener.Custom "root")
 
-      (** [on_event e parentId id ] creates new node in the tree *)
       method on_event e pid id =
-        (* Printf.printf "%s %s %s\n" (Listener.string_of_event e) (StateId.show pid) (StateId.show id); *)
         let node = H.add tbl id @@ make_node e in
         let parent = H.find tbl pid in
         H.replace tbl pid { parent with children = id :: parent.children }
@@ -255,44 +262,9 @@ module TreeLogger =
         match !root with
         | Some root ->
           let {boxes} = self#fold (to_ptree filter) in
-          print_ptree ff boxes
-          (* helper @@ H.find tbl root; Format.fprintf ff "@;"; *)
+          let labels = make_labels boxes in
+          print_ptree ff labels boxes
         | None -> ()
-        (* let rec helper ?(break=false) ({event; children} as node) =
-          let print_child ?(break=false) childId =
-            helper ~break @@ H.find tbl childId
-          in
-          let print_children ?(break=false) = function
-          | []    -> ()
-          | x::xs ->
-            (* Format.fprintf ff "@[<v 2>"; *)
-            print_child ~break x;
-            List.iter (print_child ~break:true) xs
-            (* Format.fprintf ff "@]" *)
-          in
-          let print_conjuncts conjs =
-            let children = List.fold_right (fun {children} acc -> (List.rev children) @ acc) conjs [] in
-            let x::xs = List.map (fun {event} -> Listener.string_of_event event) conjs in
-            Format.fprintf ff "(%s)" x;
-            List.iter (fun x -> Format.fprintf ff " &&& (%s)" x) xs;
-            print_children ~break:true children
-          in
-          if filter event then begin
-            if break then Format.fprintf ff "@;" else ();
-            if (is_simple_conj tbl node) then
-              print_conjuncts @@ List.map (fun id -> H.find tbl id) children
-            else begin
-              Format.fprintf ff "@[<v 2>%s" @@ Listener.string_of_event event;
-              print_children ~break:true @@ List.rev children;
-              Format.fprintf ff "@]"
-              end
-            end
-          else begin
-            print_children ~break @@ List.rev children
-            end
-        in
-        match !root with
-        | Some root -> helper @@ H.find tbl root; Format.fprintf ff "@;";
-        | None -> () *)
+
     end
   end
