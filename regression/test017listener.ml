@@ -39,10 +39,14 @@ let f a b = (a === b) &&& (b === !!1)
 
 let g a b = ?& [(a === b); (b === !!1); (a === !!2)]
 
+let filter = function
+  | "reverso" -> true
+  | _ -> false
+
 let _ =
   let logger = TreeLogger.create () in
   let stream = run ~listener:(logger :> Listener.t) q (fun q -> reverso q q) (fun qs -> qs) in
-  let _ = Stream.take ~n:3 stream in
+  let _ = Stream.take ~n:4 stream in
   logger#print Format.std_formatter
 
 (* let _ =

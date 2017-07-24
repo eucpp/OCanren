@@ -14,8 +14,12 @@ module TreeLogger :
       method fold : 'a. (StateId.t * Listener.event -> 'a list -> 'a) -> 'a
 
       (** [print ~filter formatter] pretty-prints search tree using given [formatter].
-          [filter] is an optional function argument that can be used to select only interesting nodes *)
-      method print: ?filter:(StateId.t * Listener.event -> bool) -> Format.formatter -> unit
+          [filter] is an optional function argument that can be used to select only interesting nodes;
+            when a goal-node is encountered in the tree, name of the goal is passed to the filter function;
+            it must return true if the node should be printed and false otherwise.
+          [show_unif] when true (by default) individual unifications and disequality constraint nodes are printed.
+          [color] when true (by default) the output is colored *)
+      method print: ?filter:(string -> bool) -> ?show_unif:bool -> ?color:bool -> Format.formatter -> unit
     end
 
     val create : unit -> t

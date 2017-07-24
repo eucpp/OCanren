@@ -8,13 +8,6 @@ module TreeLogger =
 
     module H = Hashtbl.Make(StateId)
 
-    let default_filter = Listener.(fun (id, event) ->
-      match event with
-      | Custom str -> not (String.equal "root" str)
-      | Success | Failure _ -> false
-      | _ -> true
-    )
-
     type color = Green | Yellow | Red | White
 
     let color_of_event event cs = Listener.(
@@ -95,14 +88,26 @@ module TreeLogger =
       b1::(fold_boxes @@ b2::bs)
     | bs -> bs
 
+    let fold_continue_box boxes =
+      if List.length boxes = 1 then
+        let [{str; inner}] = boxes in
+        if str = "continue" then inner else boxes
+      else boxes
+
     let list_max x::xs = List.fold_left (fun acc x -> max acc x) x xs
 
-    let make_pinfo (id, event) c boxes answers = Listener.(
+    (** constructs a node of pretty-print tree of boxes from a node of a search tree
+        and list of children box-nodes (i.e. in a bottom-up manner) *)
+    let make_pinfo filter show_unif (id, event) children = Listener.(
+      let boxes = fold_continue_box (List.concat @@ List.map (fun {boxes} -> boxes) children) in
+      let answers = List.concat @@ List.map (fun {answers} -> answers) children in
+      let colors = List.map (fun {c} -> c) children in
+      let c = color_of_event event colors in
       match event with
       | Conj when boxes = [] ->
-        { c=c; boxes=[]; answers }
+        { c; boxes=[]; answers }
       | Disj when boxes = [] ->
-        { c=c; boxes=[]; answers }
+        { c; boxes=[]; answers }
       | Conj ->
         let boxes = fold_boxes boxes in
         if List.length boxes = 1 then
@@ -118,11 +123,6 @@ module TreeLogger =
           let box = make_box id str c ~with_id:false ~inner:boxes in
           { c; boxes=[box]; answers }
       | Disj ->
-        (* if List.for_all is_leaf boxes then
-          let str = "(" ^ (String.concat ") ||| (" @@ List.map (fun {str} -> str) boxes) ^ ")" in
-          let box = { id; str; c; inner=[] } in
-          { c; boxes=[box] }
-        else *)
         if List.length boxes = 1 then
           { c; boxes; answers }
         else
@@ -136,38 +136,42 @@ module TreeLogger =
         else
           { c; boxes=[]; answers }
       | Unif _  ->
-        let str = string_of_event event in
-        let box = make_box id str c in
-        { c; boxes=[box]; answers=[] }
+        if show_unif then
+          let str = string_of_event event in
+          let box = make_box id str c in
+          { c; boxes=[box]; answers=[] }
+        else
+          { c; boxes=[]; answers=[] }
       | Diseq _  ->
-        let str = string_of_event event in
-        let box = make_box id str c in
-        { c; boxes=[box]; answers=[] }
-      | Answer (_, answ) ->
-        let answer = (String.concat " " answ, id) in
-        { c; boxes=[]; answers=[answer] }
-      | Goal (_, _) ->
-        let str = string_of_event event in
-        let box = make_box id str c ~inner:boxes ~answers in
-        { c; boxes=[box]; answers=[] }
-      | _ ->
-        let str = string_of_event event in
-        let box = make_box id str c ~inner:boxes in
-        { c; boxes=[box]; answers }
-    )
-
-    (** constructs a node of pretty-print tree of boxes from a node of a search tree
-        and list of children box-nodes (i.e. in a bottom-up manner) *)
-    let to_ptree : (StateId.t * Listener.event -> bool) -> StateId.t * Listener.event -> pinfo list -> pinfo =
-        fun filter ((id, event) as node) children ->
-        let boxes = List.concat @@ List.map (fun {boxes} -> boxes) children in
-        let answers = List.concat @@ List.map (fun {answers} -> answers) children in
-        let colors = List.map (fun {c} -> c) children in
-        let c = color_of_event event colors in
-        if (filter node) then
-          make_pinfo node c boxes answers
+        if show_unif then
+          let str = string_of_event event in
+          let box = make_box id str c in
+          { c; boxes=[box]; answers=[] }
+        else
+          { c; boxes=[]; answers=[] }
+      | Answer (name, answ) ->
+        if filter name then
+          let answer = (String.concat " " answ, id) in
+          { c; boxes=[]; answers=[answer] }
+        else
+          { c; boxes=[]; answers=[] }
+      | Goal (name, _) ->
+        if filter name then
+          let str = string_of_event event in
+          let box = make_box id str c ~inner:boxes ~answers in
+          { c; boxes=[box]; answers=[] }
+        else
+          { c; boxes; answers=[] }
+      | Custom msg ->
+        if (msg <> "root") then
+          let str = string_of_event event in
+          let box = make_box id str c ~inner:boxes in
+          { c; boxes=[box]; answers }
         else
           { c; boxes; answers }
+      | _ ->
+        { c; boxes; answers }
+    )
 
     (** relabels search tree node's ids to the consecutive sequence of int labels *)
     let make_labels : box list -> int H.t = fun boxes ->
@@ -186,13 +190,15 @@ module TreeLogger =
       S.iter (fun id -> incr i; H.add tbl id !i) !ordered;
       tbl
 
-    let print_ptree ff labels roots =
+    let print_tree ff color labels roots =
+      let color_str c str = if color then color_str c str else str in
       let rec helper {id; c; str; inner; with_id; link; answers } =
         let str_of_id id = Printf.sprintf "{%d} " (H.find labels id) in
         let str_id = if with_id then str_of_id id else "" in
         let str_link = if link<>None then (let Some id = link in str_of_id id) else "" in
-        let cstr = color_str c @@ Printf.sprintf "%s%s %s" str_id str str_link in
-        Format.fprintf ff "@[<v 2>%s" @@ cstr;
+        let txt = Printf.sprintf "%s%s %s" str_id str str_link in
+        let color_txt = color_str c txt in
+        Format.fprintf ff "@[<v 2>%s" color_txt;
         if answers <> [] then
           print_answers c answers
         else
@@ -228,7 +234,7 @@ module TreeLogger =
       method init: StateId.t -> unit
       method on_event: Listener.event -> StateId.t -> StateId.t -> unit
       method fold : 'a. (StateId.t * Listener.event -> 'a list -> 'a) -> 'a
-      method print: ?filter:(StateId.t * Listener.event -> bool) -> Format.formatter -> unit
+      method print: ?filter:(string -> bool) -> ?show_unif:bool -> ?color:bool -> Format.formatter -> unit
     end
 
     let create () = object (self)
@@ -254,12 +260,12 @@ module TreeLogger =
         | Some root -> helper root
         | None -> raise (Invalid_argument "Empty tree")
 
-      method print ?(filter = default_filter) ff =
+      method print ?(filter=fun _ -> true) ?(show_unif=true) ?(color=true) ff =
         match !root with
         | Some root ->
-          let {boxes} = self#fold (to_ptree filter) in
+          let {boxes} = self#fold (make_pinfo filter show_unif) in
           let labels = make_labels boxes in
-          print_ptree ff labels boxes
+          print_tree ff color labels boxes
         | None -> ()
 
     end
