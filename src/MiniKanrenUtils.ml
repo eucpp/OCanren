@@ -2,13 +2,11 @@ open MiniKanrenCore
 
 module TreeLogger =
   struct
-    type color = Green | BGreen | Yellow | Red | White
-
     type node = { event : Listener.event; children : StateId.t list }
 
-    module H = Hashtbl.Make(StateId)
-
     let make_node e = { event = e; children = []; }
+
+    module H = Hashtbl.Make(StateId)
 
     let default_filter = Listener.(fun (id, event) ->
       match event with
@@ -17,39 +15,34 @@ module TreeLogger =
       | _ -> true
     )
 
+    type color = Green | Yellow | Red | White
+
     let color_of_event event cs = Listener.(
       match event with
       | Success     -> Green
       | Failure _   -> Red
       | Conj        ->
         if (cs = []) then Yellow
-        else if List.for_all (fun c -> c == Green || c == BGreen) cs then (
-          if List.exists ((==) BGreen) cs then BGreen else Green
-        )
+        else if List.for_all ((==) Green) cs then Green
         else if List.exists ((==) Red) cs then Red
         else if List.exists ((==) Yellow) cs then Yellow
         else White
       | Disj        ->
         if (cs = []) then Yellow
         else if List.for_all ((==) Red) cs then Red
-        else if List.exists (fun c -> c == Green || c == BGreen) cs then Green
+        else if List.exists ((==) Green) cs then Green
         else if List.exists ((==) Yellow) cs then Yellow
         else White
       | Cont _      ->
         if (cs = []) then Yellow
         else if List.for_all ((==) Red) cs then Red
-        else if List.exists (fun c -> c == Green || c == BGreen) cs then (
-          (* if List.exists ((==) BGreen) cs then BGreen else Green *)
-          Green
-        )
+        else if List.exists ((==) Green) cs then Green
         else if List.exists ((==) Yellow) cs then Yellow
         else White
       | Unif _      -> let [c] = cs in c
       | Diseq _     -> let [c] = cs in c
       | Goal (_, _) -> let [c] = cs in c
-      (* | Cont _      -> let [c] = cs in c *)
-      | Answer _    -> BGreen
-      (* | Custom _    -> White *)
+      | Answer _    -> Green
       | _           -> White
     )
 
@@ -59,31 +52,41 @@ module TreeLogger =
           | Red     -> 31
           | Green   -> 32
           | Yellow  -> 33
-          | BGreen  -> 42
         in
         Printf.sprintf "\027[%dm%s\027[0m" code str
       else
         str
 
+    (** box - structure that contains information for pretty-printing a single node in search tree.*)
     type box =
+      (* id of the node in the search tree *)
       { id: StateId.t
+      (* string that describes the node *)
       ; str: string
+      (* color of node *)
       ; c: color
+      (* list of children nodes *)
       ; inner: box list
+      (* flag that specifies whether the id of node should be printed along with text *)
       ; with_id: bool
+      (* optional link to another location in the search tree *)
       ; link : StateId.t option
+      (* for goal-nodes - a list of all answers that call to this goal has produced *)
       ; answers: (string * StateId.t) list
       }
 
     let make_box ?(inner=[]) ?(with_id=true) ?(link=None) ?(answers=[]) id str c =
       { id; str; c; inner; with_id; link; answers }
 
+    (** pinfo - contains information that propogates bottom-up
+        through the search tree in order to construct corresponded tree of boxes. *)
     type pinfo = { c: color; boxes: box list; answers: (string * StateId.t) list }
 
     let is_leaf {inner} = (inner == [])
 
     let is_foldable boxes = List.for_all is_leaf boxes
 
+    (** auxiliary function that folds sequantial continuation boxes *)
     let rec fold_boxes = function
     | []  -> []
     | [b] -> [b]
@@ -94,11 +97,7 @@ module TreeLogger =
 
     let list_max x::xs = List.fold_left (fun acc x -> max acc x) x xs
 
-    let make_pinfo (id, event) children = Listener.(
-      let boxes = List.concat @@ List.map (fun {boxes} -> boxes) children in
-      let answers = List.concat @@ List.map (fun {answers} -> answers) children in
-      let colors = List.map (fun {c} -> c) children in
-      let c = color_of_event event colors in
+    let make_pinfo (id, event) c boxes answers = Listener.(
       match event with
       | Conj when boxes = [] ->
         { c=c; boxes=[]; answers }
@@ -106,19 +105,15 @@ module TreeLogger =
         { c=c; boxes=[]; answers }
       | Conj ->
         let boxes = fold_boxes boxes in
-        (* if List.length boxes = 1 then
-          (* let box = { id; str; c; inner=boxes; with_id=false } in *)
-          { c; boxes }
-        else  *)
-        if List.for_all is_leaf boxes then
+        if List.length boxes = 1 then
+          { c; boxes; answers }
+        else if List.for_all is_leaf boxes then
           let ids = List.map (fun {id} -> id) boxes in
           let id  = list_max ids in
           let str = "(" ^ (String.concat ") &&& (" @@ List.map (fun {str} -> str) boxes) ^ ")" in
-          (* let str = Printf.sprintf "{%s} %s" (StateId.show id) str in *)
           let box = make_box id str c in
           { c; boxes=[box]; answers }
         else
-          (* let str = "&&&" in *)
           let str = "&&&" in
           let box = make_box id str c ~with_id:false ~inner:boxes in
           { c; boxes=[box]; answers }
@@ -128,6 +123,9 @@ module TreeLogger =
           let box = { id; str; c; inner=[] } in
           { c; boxes=[box] }
         else *)
+        if List.length boxes = 1 then
+          { c; boxes; answers }
+        else
           let str = "conde" in
           let box = make_box id str c ~inner:boxes ~with_id:false in
           { c; boxes=[box]; answers }
@@ -158,30 +156,28 @@ module TreeLogger =
         { c; boxes=[box]; answers }
     )
 
+    (** constructs a node of pretty-print tree of boxes from a node of a search tree
+        and list of children box-nodes (i.e. in a bottom-up manner) *)
     let to_ptree : (StateId.t * Listener.event -> bool) -> StateId.t * Listener.event -> pinfo list -> pinfo =
-      fun filter ((id, event) as node) children ->
-        (* let colors = List.map (fun {c} -> c) children in
-        let ps = List.concat @@ List.map (fun {c} -> c) children in
-        let c = color_of_event event colors in *)
+        fun filter ((id, event) as node) children ->
+        let boxes = List.concat @@ List.map (fun {boxes} -> boxes) children in
+        let answers = List.concat @@ List.map (fun {answers} -> answers) children in
+        let colors = List.map (fun {c} -> c) children in
+        let c = color_of_event event colors in
         if (filter node) then
-          make_pinfo node children
+          make_pinfo node c boxes answers
         else
-          let c = color_of_event event (List.map (fun {c} -> c) children) in
-          let boxes = List.concat @@ List.map (fun {boxes} -> boxes) children in
-          let answers = List.concat @@ List.map (fun {answers} -> answers) children in
           { c; boxes; answers }
-          (* (id, c, ps) *)
 
+    (** relabels search tree node's ids to the consecutive sequence of int labels *)
     let make_labels : box list -> int H.t = fun boxes ->
       let module S = Set.Make(StateId) in
       let ordered = ref S.empty in
-      let rec helper {id; inner; with_id; link} =
-        if with_id then
-          ordered := S.add id !ordered
-        else if link <> None then
-          let Some id = link in
-          ordered := S.add id !ordered
-        else ();
+      let add_id id = (ordered := S.add id !ordered) in
+      let rec helper {id; inner; with_id; link; answers} =
+        if with_id then (add_id id);
+        if link <> None then (let Some id = link in add_id id);
+        List.iter (fun (_, id) -> add_id id) answers;
         List.iter helper inner
       in
       List.iter helper boxes;

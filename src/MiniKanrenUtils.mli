@@ -10,6 +10,7 @@ module TreeLogger :
       (** [on_event e parentId id ] creates new node in the tree *)
       method on_event: Listener.event -> StateId.t -> StateId.t -> unit
 
+      (** [fold f] folds a tree in a bottom-up manner using given function [f] *)
       method fold : 'a. (StateId.t * Listener.event -> 'a list -> 'a) -> 'a
 
       (** [print ~filter formatter] pretty-prints search tree using given [formatter].
