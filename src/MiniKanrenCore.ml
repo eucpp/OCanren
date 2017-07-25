@@ -1573,78 +1573,6 @@ module Trace =
 
   end
 
-(** ************************************************************************* *)
-(** Tabling primitives                                                        *)
-
-let slave_call argv cache ((env, subst, constr, scope) as st) =
-  let rec consume it seen =
-    if Cache.equal_iter it seen then
-      MKStream.make_waiting cache consume
-    else
-      let x, it' = Cache.consume cache it in
-      let answ = refresh env subst x in
-      (* printf "consume from cache %s\n" (generic_show answ); *)
-      match Subst.unify env argv answ subst ~scope:non_local_scope with
-        | Some (_, s) -> MKStream.choice (env, s, constr, tabling_cache_scope) (MKStream.from_fun @@ fun () -> consume it' seen)
-        | None      -> failwith "Cannot unify cached term with argument term"
-  in
-  consume (Cache.start_iter cache) (Cache.end_iter cache)
-
-let tabling_hook argv cache ((env, subst, constr) as st) =
-  (* let empty_env = Env.empty () in *)
-  (* refine argv in current subst *)
-  let argv' = refine env subst (fun _ -> []) argv in
-  (* rename all variables to 0 ... n *)
-  let argv'' = refresh (Env.empty ()) Subst.empty argv' in
-  let alpha_eq answ =
-    (* all variables in both terms are renamed to 0 ... n, *)
-    (* because of that simple equivalence test is enough *)
-    let answ'' = refresh (Env.empty ()) Subst.empty answ in
-    (* printf "alpha-eq? \n    %s\n    %s\n" (generic_show argv'') (generic_show answ''); *)
-    argv'' = answ''
-  in
-  (* let _ = printf "tabling_hook %s\n" (generic_show argv') in *)
-  let is_cached = Cache.fold (fun acc answ -> acc || alpha_eq answ) false cache in
-  (* printf "is_cached? %d\n" (if is_cached then 1 else 0); *)
-  if not is_cached then begin
-    Cache.add cache (refine env subst (fun _ -> []) argv');
-    success st
-  end
-  else
-    failure ()
-
-type table = Env.t * ((Obj.t, Cache.t) Hashtbl.t)
-
-let make_table () = (Env.empty (), Hashtbl.create 1031)
-
-let tabled (empty_env, tbl) goal args_list ((env, subst, constr, _) as st) =
-  let argv = refine env subst (fun _ -> []) args_list in
-  let key  = refresh (Env.reset empty_env) Subst.empty argv in
-  try
-    let cache = Hashtbl.find tbl key in
-    (* printf "slave call %s\n" (generic_show key); *)
-    slave_call argv cache st
-  with Not_found ->
-    let cache = Cache.create () in
-    (* printf "master call %s\n" (generic_show key); *)
-    Hashtbl.add tbl key cache;
-    ((goal ()) &&& (tabling_hook argv cache)) st
-
-let tabled1 tbl goal q =
-  tabled tbl (fun () -> goal q) @@ Obj.repr [Obj.repr q;]
-
-let tabled2 tbl goal q r =
-  tabled tbl (fun () -> goal q r) @@ Obj.repr [Obj.repr q; Obj.repr r]
-
-let tabled3 tbl goal q r s =
-  tabled tbl (fun () -> goal q r s) @@ Obj.repr [Obj.repr q; Obj.repr r; Obj.repr s]
-
-let tabled4 tbl goal q r s t =
-  tabled tbl (fun () -> goal q r s t) @@ Obj.repr [Obj.repr q; Obj.repr r; Obj.repr s; Obj.repr t]
-
-let tabled5 tbl goal p q r s t =
-  tabled tbl (fun () -> goal p q r s t) @@ Obj.repr [Obj.repr p; Obj.repr q; Obj.repr r; Obj.repr s; Obj.repr t]
-
 let unify ?p (x: _ injected) y =
   Trace.(trace two @@ unif ?p) x y (
     let open State in fun {env; subst; ctrs; scope} as st ->
@@ -1740,3 +1668,78 @@ let negation g st =
     MKStream.single st
   else
     MKStream.nil
+
+(** ************************************************************************* *)
+(** Tabling primitives                                                        *)
+
+let slave_call argv cache =
+  let open State in fun {env; subst; scope; ctrs} as st ->
+  let rec consume it seen =
+    if Cache.equal_iter it seen then
+      MKStream.make_waiting cache consume
+    else
+      let x, it' = Cache.consume cache it in
+      let answ = refresh env subst x in
+      (* printf "consume from cache %s\n" (generic_show answ); *)
+      match Subst.unify env argv answ subst ~scope:non_local_scope with
+        | Some (_, s) -> MKStream.choice {st with subst=s; scope=tabling_cache_scope} (MKStream.from_fun @@ fun () -> consume it' seen)
+        | None      -> failwith "Cannot unify cached term with argument term"
+  in
+  consume (Cache.start_iter cache) (Cache.end_iter cache)
+
+let tabling_hook argv cache =
+  let open State in fun {env; subst;} as st ->
+  (* let empty_env = Env.empty () in *)
+  (* refine argv in current subst *)
+  let argv' = refine env subst (fun _ -> []) argv in
+  (* rename all variables to 0 ... n *)
+  let argv'' = refresh (Env.empty ()) Subst.empty argv' in
+  let alpha_eq answ =
+    (* all variables in both terms are renamed to 0 ... n, *)
+    (* because of that simple equivalence test is enough *)
+    let answ'' = refresh (Env.empty ()) Subst.empty answ in
+    (* printf "alpha-eq? \n    %s\n    %s\n" (generic_show argv'') (generic_show answ''); *)
+    argv'' = answ''
+  in
+  (* let _ = printf "tabling_hook %s\n" (generic_show argv') in *)
+  let is_cached = Cache.fold (fun acc answ -> acc || alpha_eq answ) false cache in
+  (* printf "is_cached? %d\n" (if is_cached then 1 else 0); *)
+  if not is_cached then begin
+    Cache.add cache (refine env subst (fun _ -> []) argv');
+    success st
+  end
+  else
+    failure ~reason:"Already seen answer" st
+
+type table = Env.t * ((Obj.t, Cache.t) Hashtbl.t)
+
+let make_table () = (Env.empty (), Hashtbl.create 1031)
+
+let tabled (empty_env, tbl) goal args_list =
+  let open State in fun {env; subst;} as st ->
+  let argv = refine env subst (fun _ -> []) args_list in
+  let key  = refresh (Env.reset empty_env) Subst.empty argv in
+  try
+    let cache = Hashtbl.find tbl key in
+    (* printf "slave call %s\n" (generic_show key); *)
+    slave_call argv cache st
+  with Not_found ->
+    let cache = Cache.create () in
+    (* printf "master call %s\n" (generic_show key); *)
+    Hashtbl.add tbl key cache;
+    ((goal ()) &&& (tabling_hook argv cache)) st
+
+let tabled1 tbl goal q =
+  tabled tbl (fun () -> goal q) @@ Obj.repr [Obj.repr q;]
+
+let tabled2 tbl goal q r =
+  tabled tbl (fun () -> goal q r) @@ Obj.repr [Obj.repr q; Obj.repr r]
+
+let tabled3 tbl goal q r s =
+  tabled tbl (fun () -> goal q r s) @@ Obj.repr [Obj.repr q; Obj.repr r; Obj.repr s]
+
+let tabled4 tbl goal q r s t =
+  tabled tbl (fun () -> goal q r s t) @@ Obj.repr [Obj.repr q; Obj.repr r; Obj.repr s; Obj.repr t]
+
+let tabled5 tbl goal p q r s t =
+  tabled tbl (fun () -> goal p q r s t) @@ Obj.repr [Obj.repr p; Obj.repr q; Obj.repr r; Obj.repr s; Obj.repr t]
