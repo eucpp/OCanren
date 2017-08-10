@@ -30,17 +30,117 @@ end;;
 | O
 | S of 'a with show, html, eq, compare, foldl, foldr, gmap
 
-module Option : sig
-  type 'a t = 'a option
-  val fmap : ('a -> 'b) -> 'a t -> 'b t
+(** {3 Relational pairs} *)
+module Pair :
+  sig
 
-  val reify :
-    (helper -> ('a, 'b) injected -> 'b) ->
-    helper -> ('a t, 'b t logic) injected -> 'b t logic
+    (** Type synonym to prevent toplevel [logic] from being hidden *)
+    type 'a logic' = 'a logic
 
-  val some : ('a, 'b) injected -> ('a t, 'b t logic) injected
-  val none : unit -> ('a t, 'b t logic) injected
-end
+    (** Synonym for regular option type *)
+    type ('a, 'b) t = 'a * 'b
+
+    (** Ground option (the regular one) *)
+    type ('a, 'b) ground = 'a * 'b
+
+    (** Logic option *)
+    type ('a, 'b) logic = ('a * 'b) logic'
+
+    (** GT-compatible typeinfo for [ground] *)
+    val ground :
+      (unit,
+       < compare : ('a -> 'a -> GT.comparison) -> ('b -> 'b -> GT.comparison) -> ('a, 'b) ground -> ('a, 'b) ground -> GT.comparison;
+         eq      : ('a -> 'a -> bool) -> ('b -> 'b -> bool) -> ('a, 'b) ground -> ('a, 'b) ground -> bool;
+         foldl   : ('c -> 'a -> 'c) -> ('c -> 'b -> 'c) -> 'c -> ('a, 'b) ground -> 'c;
+         foldr   : ('c -> 'a -> 'c) -> ('c -> 'b -> 'c) -> 'c -> ('a, 'b) ground -> 'c;
+         gmap    : ('a -> 'c) -> ('b -> 'd) -> ('a, 'b) ground -> ('c, 'd) ground;
+         html    : ('a -> HTML.viewer) -> ('b -> HTML.viewer) -> ('a, 'b) ground -> HTML.viewer;
+         show    : ('a -> string) -> ('b -> string) -> ('a, 'b) ground -> string >)
+      GT.t
+
+    (** GT-compatible typeinfo for [logic] *)
+    val logic :
+      (unit,
+       < compare : ('a -> 'a -> GT.comparison) -> ('b -> 'b -> GT.comparison) -> ('a, 'b) logic -> ('a, 'b) logic -> GT.comparison;
+         eq      : ('a -> 'a -> bool) -> ('b -> 'b -> bool) -> ('a, 'b) logic -> ('a, 'b) logic -> bool;
+         foldl   : ('c -> 'a -> 'c) -> ('c -> 'b -> 'c) -> 'c -> ('a, 'b) logic -> 'c;
+         foldr   : ('c -> 'a -> 'c) -> ('c -> 'b -> 'c) -> 'c -> ('a, 'b) logic -> 'c;
+         gmap    : ('a -> 'c) -> ('b -> 'd) -> ('a, 'b) logic -> ('c, 'd) logic;
+         html    : ('a -> HTML.viewer) -> ('b -> HTML.viewer) -> ('a, 'b) logic -> HTML.viewer;
+         show    : ('a -> string) -> ('b -> string) -> ('a, 'b) logic -> string >)
+      GT.t
+
+    (** Logic injection (for reification) *)
+    val inj : ('a -> 'c) -> ('b -> 'd) -> ('a, 'b) ground -> ('c, 'd) logic
+
+    (** A synonym for injected pair *)
+    type ('a, 'b, 'c, 'd) groundi = (('a, 'c) ground, ('b, 'd) logic) injected
+
+    (** Make injected pair from ground one with injected components *)
+    val pair : ('a, 'b) injected -> ('c, 'd) injected -> ('a, 'b, 'c, 'd) groundi
+
+    (** Reifier *)
+    val reify : (helper -> ('a, 'b) injected -> 'b) -> (helper -> ('c, 'd) injected -> 'd) -> helper -> ('a, 'b, 'c, 'd) groundi -> ('b, 'd) logic
+
+  end
+
+(** {3 Relational [option]} *)
+module Option :
+  sig
+
+    (** Type synonym to prevent toplevel [logic] from being hidden *)
+    type 'a logic' = 'a logic
+
+    (** Synonym for regular option type *)
+    type 'a t = 'a option
+
+    (** Ground option (the regular one) *)
+    type 'a ground = 'a option
+
+    (** Logic option *)
+    type 'a logic = 'a option logic'
+
+    (** GT-compatible typeinfo for [ground] *)
+    val ground :
+      (unit,
+       < compare : ('a -> 'a -> GT.comparison) -> 'a ground -> 'a ground -> GT.comparison;
+         eq      : ('a -> 'a -> bool) -> 'a ground -> 'a ground -> bool;
+         foldl   : ('a -> 'b -> 'a) -> 'a -> 'b ground -> 'a;
+         foldr   : ('a -> 'b -> 'a) -> 'a -> 'b ground -> 'a;
+         gmap    : ('a -> 'b) -> 'a ground -> 'b ground;
+         html    : ('a -> HTML.viewer) -> 'a ground -> HTML.viewer;
+         show    : ('a -> string) -> 'a ground -> string >)
+      GT.t
+
+    (** GT-compatible typeinfo for [logic] *)
+    val logic :
+      (unit,
+       < compare : ('a -> 'a -> GT.comparison) -> 'a logic -> 'a logic -> GT.comparison;
+         eq      : ('a -> 'a -> bool) -> 'a logic -> 'a logic -> bool;
+         foldl   : ('a -> 'b -> 'a) -> 'a -> 'b logic -> 'a;
+         foldr   : ('a -> 'b -> 'a) -> 'a -> 'b logic -> 'a;
+         gmap    : ('a -> 'b) -> 'a logic -> 'b logic;
+         html    : ('a -> HTML.viewer) -> 'a logic -> HTML.viewer;
+         show    : ('a -> string) -> 'a logic -> string >)
+      GT.t
+
+    (** Logic injection (for reification) *)
+    val inj : ('a -> 'b) -> 'a ground -> 'b logic
+
+    (** A synonym for injected option *)
+    type ('a, 'b) groundi = ('a ground, 'b logic) injected
+
+    (** Make injected [option] from ground one with injected value *)
+    val option : ('a, 'b) injected ground -> ('a, 'b) groundi
+
+    (** Reifier *)
+    val reify : (helper -> ('a, 'b) injected -> 'b) -> helper -> ('a, 'b) groundi -> 'b logic
+
+    (** Injection counterpart for constructors *)
+    val some : ('a, 'b) injected -> ('a, 'b) groundi
+    val none : unit -> ('a, 'b) groundi
+
+  end
 
 (** {3 Relations on booleans} *)
 module Bool :
@@ -327,7 +427,6 @@ val inj_list : ('a -> ('a, 'b) injected) -> 'a list -> ('a, 'b) List.groundi
 
 val inj_listi : ('a, 'b) injected list -> ('a, 'b) List.groundi
 
-val inj_pair   : ('a, 'b) injected -> ('c, 'd) injected -> ('a * 'c, ('b * 'd) logic) injected
 val inj_triple : ('a, 'd) injected -> ('b, 'e) injected -> ('c,'f) injected -> ('a * 'b * 'c, ('d * 'e * 'f) logic) injected
 
 (** [inj_nat_list l] is a deforsted synonym for injection *)

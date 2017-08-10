@@ -39,7 +39,7 @@ open GTyp
 
 let rec lookupo a g t =
   Fresh.three (fun a' t' tl ->
-    (g === (inj_pair a' t')%tl) &&&
+    (g === (Pair.pair a' t')%tl) &&&
     (conde [
       (a' === a) &&& (t' === t);
       lookupo a tl t
@@ -59,7 +59,7 @@ let infero expr typ =
       Fresh.four (fun x l t t' ->
         (expr === abs x l) &&&
         (typ  === arr t t') &&&
-        (infero ((inj_pair x t)%gamma) l t'))
+        (infero ((Pair.pair x t)%gamma) l t'))
     ]
   in
   infero (nil()) expr typ
@@ -67,7 +67,7 @@ let infero expr typ =
 let show_string  = show(string)
 let show_stringl = show(logic) (show(string))
 
-let inj_list_p xs = inj_listi @@ List.map (fun (x,y) -> inj_pair x y) xs
+let inj_list_p xs = inj_listi @@ List.map (fun (x,y) -> Pair.pair x y) xs
 
 (* Without free variables *)
 let () =
