@@ -1574,6 +1574,7 @@ module Trace =
   end
 
 let unify ?p (x: _ injected) y =
+  incr unif_counter;
   Trace.(trace two @@ unif ?p) x y (
     let open State in fun {env; subst; ctrs; scope} as st ->
     match Subst.unify env x y scope subst with
@@ -1589,6 +1590,7 @@ let unify ?p (x: _ injected) y =
 let (===) x y = unify x y
 
 let diseq ?p x y =
+  incr diseq_counter;
   Trace.(trace two @@ diseq ?p) x y (
     let open State in fun {env; subst; ctrs; scope} as st ->
     (* For disequalities we unify in non-local scope to prevent defiling *)
