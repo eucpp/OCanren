@@ -253,8 +253,11 @@ let logic = {logic with
 module Var =
   struct
     type env    = int
+    type rank   = int
     type scope  = int
     type anchor = int list
+
+    type quantifier = Exist | Univ
 
     let unused_index = -1
 
@@ -270,23 +273,49 @@ module Var =
       anchor        : anchor;
       env           : env;
       index         : int;
+      quant         : quantifier;
       mutable subst : Obj.t option;
       scope         : scope;
+      rank          : rank;
       constraints   : Obj.t list
     }
 
-    let make ~env ~scope index = {
+    type binding = {var : t; term : Obj.t }
+
+    let make ~env ~quant ~rank ~scope index = {
       env         = env;
       anchor      = global_anchor;
       subst       = None;
       constraints = [];
       index;
+      quant;
       scope;
+      rank;
     }
+
+    let equal x y =
+      assert (x.env = y.env);
+      x.index = y.index
 
     let compare x y =
       assert (x.env = y.env);
       x.index - y.index
+
+    let unify x y =
+      if x.index = y.index
+      then Some []
+      else (
+        let helper x y =
+          if x.rank < y.rank
+          then Some [{var=x; term=Obj.repr y}]
+          else None
+        in
+        match x.quant, y.quant with
+        | Univ,  Exist  -> helper x y
+        | Exist, Univ   -> helper y x
+        | Exist, Exist  -> Some [{var=x; term=Obj.repr y}]
+        | Univ,  Univ   -> None
+      )
 
   end
 
@@ -425,8 +454,9 @@ module Env :
     type t
 
     val empty     : unit -> t
-    val fresh     : ?name:string -> scope:Var.scope -> t -> 'a * t
-    val var       : t -> 'a -> int option
+    val fresh     : rank:Var.rank -> scope:Var.scope -> t -> 'a * t
+    val eigen     : rank:Var.rank -> scope:Var.scope -> t -> 'a * t
+    val var       : t -> 'a -> Var.t option
     val is_var    : t -> 'a -> bool
     val free_vars : t -> 'a -> VarSet.t
     val merge     : t -> t -> t
@@ -440,8 +470,13 @@ module Env :
       incr last_anchor;
       {anchor = !last_anchor; next = 10}
 
-    let fresh ?name ~scope e =
-      let v = !!!(Var.make ~env:e.anchor ~scope e.next) in
+    let fresh ~rank ~scope e =
+      let v = !!!(Var.make ~env:e.anchor ~quant:Var.Exist ~rank ~scope e.next) in
+      e.next <- 1 + e.next;
+      (!!!v, e)
+
+    let eigen ~rank ~scope e =
+      let v = !!!(Var.make ~env:e.anchor ~quant:Var.Univ ~rank ~scope e.next) in
       e.next <- 1 + e.next;
       (!!!v, e)
 
@@ -449,7 +484,8 @@ module Env :
       let index = 0 in (* dummy index *)
       let env   = 0 in (* dummy env token *)
       let scope = 0 in (* dummy scope *)
-      let v = Var.make ~env ~scope index in
+      let rank  = 0 in (* dummy rank *)
+      let v:Var.t = Var.make ~env ~scope ~rank ~quant:Var.Exist index in
       Obj.tag !!!v, Obj.size !!!v
 
     let var env x =
@@ -460,9 +496,10 @@ module Env :
       then
         let q = (!!!x : Var.t).Var.env in
         if (Obj.is_int !!!q) && q == env.anchor
-        then Some (!!!x : Var.t).index
+        then Some (!!!x : Var.t)
         else failwith "OCanren fatal (Env.var): wrong environment"
-      else None
+      else
+        None
 
     let is_var env v = None <> var env v
 
@@ -492,13 +529,12 @@ module Env :
 module Subst :
   sig
     type t
-    type content = {var : Var.t; term : Obj.t }
 
     val empty : t
 
-    val of_list : content list -> t
+    val of_list : Var.binding list -> t
 
-    val split : t -> content list
+    val split : t -> Var.binding list
 
     val walk  : Env.t -> t -> 'a -> 'a
 
@@ -512,7 +548,7 @@ module Subst :
      *   Otherwise it returns a pair of prefix and new substituion.
      *   Prefix is a list of pairs (var, term) that were added to the original substituion.
      *)
-    val unify   : Env.t -> 'a -> 'a -> scope:Var.scope -> t -> (content list * t) option
+    val unify   : Env.t -> 'a -> 'a -> scope:Var.scope -> t -> (Var.binding list * t) option
 
     (* [merge env s1 s2] merges two substituions *)
     val merge : Env.t -> t -> t -> t option
@@ -521,14 +557,13 @@ module Subst :
     val is_subsumed : Env.t -> t -> t -> bool
   end =
   struct
-    type content = {var : Var.t; term : Obj.t }
-    type t       = content M.t
+    type t = Var.binding M.t
 
     let empty = M.empty
 
     let of_list =
-      ListLabels.fold_left ~init:empty ~f:(fun subst cnt ->
-        M.add cnt.var.index cnt subst
+      ListLabels.fold_left ~init:empty ~f:(fun subst binding ->
+        M.add binding.Var.var.index binding subst
       )
 
     let split s = M.fold (fun _ x xs -> x::xs) s []
@@ -540,7 +575,7 @@ module Subst :
         match v.subst with
         | Some term -> walk env subst !!!term
         | None ->
-            try walk env subst (Obj.obj (M.find v.index subst).term)
+            try walk env subst (Obj.obj (M.find v.Var.index subst).Var.term)
             with Not_found -> t
       else t
 
@@ -564,16 +599,16 @@ module Subst :
             copy
           | Invalid n -> failwith (sprintf "OCanren fatal (Subst.deepwalk): invalid value (%d)" n)
           end
-        | Some n when List.mem n forbidden -> Obj.repr var
+        | Some n when List.mem n.Var.index forbidden -> Obj.repr var
         | Some n ->
             let cs =
               walk_ctrs !!!var |>
               List.filter (fun t ->
                 match Env.var env t with
-                | Some i  -> not (List.mem i forbidden)
+                | Some i  -> not (List.mem i.Var.index forbidden)
                 | None    -> true
               ) |>
-              List.map (fun t -> !!!(helper (n::forbidden) t))
+              List.map (fun t -> !!!(helper (n.Var.index::forbidden) t))
             in
             Obj.repr {!!!var with Var.constraints = cs}
       in
@@ -584,11 +619,11 @@ module Subst :
 
     let is_bound var subst = M.mem var.Var.index subst
 
-    let rec occurs env xi term subst =
+    let rec occurs env x term subst =
       let y = walk env subst term in
       match Env.var env y with
-      | Some yi -> xi = yi
-      | None ->
+      | Some y  -> Var.equal x y
+      | None    ->
          let wy = wrap (Obj.repr y) in
          match wy with
          | Invalid n when n = Obj.closure_tag -> false
@@ -597,7 +632,7 @@ module Subst :
          | Boxed (_, s, f) ->
             let rec inner i =
               if i >= s then false
-              else occurs env xi (!!!(f i)) subst || inner (i+1)
+              else occurs env x (!!!(f i)) subst || inner (i+1)
             in
             inner 0
 
@@ -611,31 +646,35 @@ module Subst :
            the variable is be distructively substituted: we will not look on it in future.
       *)
 
-      let extend xi x term (prefix, sub1) =
-        if occurs env xi term sub1 then raise Occurs_check
+      let extend binding (prefix, sub1) =
+        let var, term = binding.Var.var, binding.Var.term in
+        if occurs env var term sub1 then raise Occurs_check
         else
-          let cnt = {var = x; term = Obj.repr term} in
-          assert (Env.var env x <> Env.var env term);
+          assert (Env.var env var <> Env.var env term);
           let sub2 =
-            if scope = x.Var.scope
+            if scope = var.scope
             then begin
-              x.subst <- Some (Obj.repr term);
+              var.subst <- Some term;
               sub1
             end
-            else M.add x.Var.index cnt sub1
+            else M.add var.index binding sub1
           in
-          Some (cnt::prefix, sub2)
+          Some (binding::prefix, sub2)
       in
-      let rec helper x y : (content list * t) option -> _ = function
+      let rec helper x y : (Var.binding list * t) option -> (Var.binding list * t) option = function
         | None -> None
         | Some ((delta, subs) as pair) as acc ->
             let x = walk env subs x in
             let y = walk env subs y in
             match Env.var env x, Env.var env y with
-            | (Some xi, Some yi) when xi = yi -> acc
-            | (Some xi, Some _) -> extend xi x y pair
-            | Some xi, _        -> extend xi x y pair
-            | _      , Some yi  -> extend yi y x pair
+            | Some x, Some y ->
+              begin match Var.unify x y with
+              | Some [binding] -> extend binding pair
+              | Some []        -> acc
+              | None           -> None
+              end
+            | Some x, _      -> extend {var=x; term=Obj.repr y} pair
+            | _     , Some y -> extend {var=y; term=Obj.repr x} pair
             | _ ->
                 let wx, wy = wrap (Obj.repr x), wrap (Obj.repr y) in
                 (match wx, wy with
@@ -657,12 +696,12 @@ module Subst :
                  | _ -> None
                 )
       in
-      try helper !!!x !!!y (Some ([], main_subst))
+      try helper x y (Some ([], main_subst))
       with Occurs_check -> None
 
-      let merge env subst1 subst2 = M.fold (fun _ {var; term} -> function
+      let merge env subst1 subst2 = M.fold (fun _ binding -> function
         | Some s  -> begin
-          match unify env !!!var term ~scope:Var.non_local_scope s with
+          match unify env !!!binding.Var.var binding.Var.term ~scope:Var.non_local_scope s with
           | Some (_, s') -> Some s'
           | None         -> None
           end
@@ -670,8 +709,8 @@ module Subst :
       ) subst1 (Some subst2)
 
       let is_subsumed env subst =
-        M.for_all (fun _ {var; term} ->
-          match unify env !!!var term ~scope:Var.non_local_scope subst with
+        M.for_all (fun _ binding ->
+          match unify env !!!binding.Var.var binding.Var.term ~scope:Var.non_local_scope subst with
           | None          -> false
           | Some ([], _)  -> true
           | Some (_ , _)  -> false
@@ -691,25 +730,25 @@ module Disequality :
     (* [of_disj env subst] build a disequality constraint store from a list of bindings
      *   Ex. [(x, 5); (y, 6)] --> (x =/= 5) \/ (y =/= 6)
      *)
-    val of_disj : Env.t -> Subst.content list -> t
+    val of_disj : Env.t -> Var.binding list -> t
 
     (* [of_conj env subst] build a disequality constraint store from a list of bindings
      *   Ex. [(x, 5); (y, 6)] --> (x =/= 5) /\ (y =/= 6)
      *)
-    val of_conj : Env.t -> Subst.content list -> t
+    val of_conj : Env.t -> Var.binding list -> t
 
     (* [check ~prefix env subst diseq] - checks that disequality is not violated in refined substitution.
      *   [prefix] is a substitution prefix, i.e. new bindings obtained during unification.
      *   This function may rebuild internal representation of constraints and thus it returns new object.
      *   Raises [Disequality_violated].
      *)
-    val check  : prefix:Subst.content list -> Env.t -> Subst.t -> t -> t
+    val check  : prefix:Var.binding list -> Env.t -> Subst.t -> t -> t
 
     (* [extend ~prefix env diseq] - extends disequality with new bindings.
      *   New bindings are interpreted as formula in DNF.
      *   Ex. [(x, 5); (y, 6)] --> (x =/= 5) \/ (y =/= 6)
      *)
-    val extend : prefix:Subst.content list -> Env.t -> t -> t
+    val extend : prefix:Var.binding list -> Env.t -> t -> t
 
     (* [project env subst diseq x] projects [diseq] to free-variables, mentioned in [fv],
      *   i.e. it extracts only those constraints that mention at least one variable from FV(x)
@@ -754,7 +793,7 @@ module Disequality :
         type t
 
         (* [of_list diseqs] build single disjunction from list of disequalities *)
-        val of_list : Subst.content list -> t
+        val of_list : Var.binding list -> t
 
         (* [check env subst disj] - checks that disjunction of disequalities is
          *   not violated in (current) substitution.
@@ -772,7 +811,7 @@ module Disequality :
          *   2) When we want to reify an answer we again try to unify current substitution with disequalities.
          *        Then we look into `disequality` prefix for bindings that should not be met.
          *)
-        val refine : Env.t -> Subst.t -> t -> (Subst.content list * Subst.t) option
+        val refine : Env.t -> Subst.t -> t -> (Var.binding list * Subst.t) option
 
         (* returns an index of variable involved in some disequality inside disjunction *)
         val index : t -> int
@@ -780,7 +819,7 @@ module Disequality :
         val reify : Var.t -> t -> 'a
       end =
       struct
-        type t = { sample : Subst.content; unchecked : Subst.content list }
+        type t = { sample : Var.binding; unchecked : Var.binding list }
 
         let choose_sample unchecked =
           assert (unchecked <> []);
@@ -793,11 +832,11 @@ module Disequality :
         type status =
           | Fulfiled
           | Violated
-          | Refined of Subst.content list * Subst.t
+          | Refined of Var.binding list * Subst.t
 
-        let refine' env subst =
-        let open Subst in fun { var; term } ->
-          match unify env !!!var term Var.non_local_scope subst with
+        let refine' env subst binding =
+          let var, term = binding.Var.var, binding.Var.term in
+          match Subst.unify env !!!var term Var.non_local_scope subst with
           | None                  -> Fulfiled
           | Some ([], _)          -> Violated
           | Some (prefix, subst)  -> Refined (prefix, subst)
@@ -832,10 +871,10 @@ module Disequality :
           if unchecked <> []
           then invalid_arg "OCanren fatal (Disequality.reify): attempting to reify unnormalized disequalities"
           else
-            assert (var.Var.index = sample.Subst.var.Var.index);
-            !!!(sample.Subst.term)
+            assert (var.Var.index = sample.Var.var.index);
+            !!!(sample.Var.term)
 
-        let index {sample} = sample.Subst.var.index
+        let index {sample} = sample.Var.var.index
       end
 
     module Index :
@@ -892,17 +931,17 @@ module Disequality :
             )
       in
       ListLabels.fold_left prefix ~init:cstore
-        ~f:(fun cstore cnt ->
-          let var_idx = cnt.Subst.var.index in
-          let conj = Index.get var_idx cstore in
-          let stayed1, rebound1 = revisit_conjuncts var_idx conj in
-          let cstore, rebound2 = match Env.var env cnt.Subst.term with
-            | Some n ->
-              let stayed2, rebound2 = revisit_conjuncts n @@ Index.get n cstore in
-              Index.replace n stayed2 cstore, rebound2
+        ~f:(let open Var in fun cstore {var=x; term} ->
+          let conj = Index.get x.index cstore in
+          let stayed1, rebound1 = revisit_conjuncts x.index conj in
+          let cstore, rebound2 =
+            match Env.var env term with
+            | Some y ->
+              let stayed2, rebound2 = revisit_conjuncts y.index @@ Index.get y.index cstore in
+              Index.replace y.index stayed2 cstore, rebound2
             | None   -> cstore, []
           in
-          let cstore = Index.replace var_idx stayed1 cstore in
+          let cstore = Index.replace x.index stayed1 cstore in
           let extend rebound cstore =
             ListLabels.fold_left rebound ~init:cstore
             ~f:(fun cstore disj ->
@@ -955,7 +994,7 @@ module Disequality :
       let cs = refine env subst t |> List.map (fun delta,_,_ -> delta) in
       (* fixpoint-like computation of disequalities relevant to variables in [fv] *)
       let rec helper fv =
-        let open Subst in
+        let open Var in
         let is_relevant fv {var; term} =
           (VarSet.mem var fv) ||
           (match Env.var env term with Some _ -> VarSet.mem (!!!term) fv | None -> false)
@@ -1012,7 +1051,7 @@ module State =
     let constraints {ctrs;} = ctrs
 
     let new_var {env; scope} =
-      let (x,_) = Env.fresh ~scope env in
+      let (x,_) = Env.fresh ~scope ~rank:0 env in
       let i = (!!!x : Var.t).index in
       (x,i)
 
@@ -1052,7 +1091,7 @@ let failure _  = Stream.Internal.nil
 
 let call_fresh f =
   let open State in fun {env; scope} as st ->
-    let x, env' = Env.fresh ~scope env in
+    let x, env' = Env.fresh ~scope ~rank:0 env in
     f x {st with env=env'}
 
 let (===) (x: _ injected) y =
