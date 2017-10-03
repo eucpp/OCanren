@@ -415,9 +415,6 @@ let from_logic = function
 
 let (!!) x = inj (lift x)
 
-module M = Map.Make (struct type t = int let compare = (-) end)
-module Int = struct type t = int let compare = (-) end
-
 module VarSet = Set.Make(Var)
 
 module Env :
@@ -489,6 +486,8 @@ module Env :
       {anchor=anchor1; next = max next1 next2}
   end
 
+module VarMap = Map.Make(Var)
+
 module Subst :
   sig
     type t
@@ -522,16 +521,16 @@ module Subst :
   end =
   struct
     type content = {var : Var.t; term : Obj.t }
-    type t       = content M.t
+    type t       = Obj.t VarMap.t
 
-    let empty = M.empty
+    let empty = VarMap.empty
 
     let of_list =
       ListLabels.fold_left ~init:empty ~f:(fun subst cnt ->
-        M.add cnt.var.index cnt subst
+        VarMap.add cnt.var cnt.term subst
       )
 
-    let split s = M.fold (fun _ x xs -> x::xs) s []
+    let split s = VarMap.fold (fun var term xs -> {var; term}::xs) s []
 
     let rec walk env subst t =
       if Env.is_var env t
@@ -540,7 +539,7 @@ module Subst :
         match v.subst with
         | Some term -> walk env subst !!!term
         | None ->
-            try walk env subst (Obj.obj (M.find v.index subst).term)
+            try walk env subst (Obj.obj (VarMap.find v subst))
             with Not_found -> t
       else t
 
@@ -582,7 +581,7 @@ module Subst :
     let free_vars env subst x =
       Env.free_vars env @@ deepwalk env subst x
 
-    let is_bound var subst = M.mem var.Var.index subst
+    let is_bound = VarMap.mem
 
     let rec occurs env xi term subst =
       let y = walk env subst term in
@@ -622,7 +621,7 @@ module Subst :
               x.subst <- Some (Obj.repr term);
               sub1
             end
-            else M.add x.Var.index cnt sub1
+            else VarMap.add x (Obj.repr term) sub1
           in
           Some (cnt::prefix, sub2)
       in
@@ -660,7 +659,7 @@ module Subst :
       try helper !!!x !!!y (Some ([], main_subst))
       with Occurs_check -> None
 
-      let merge env subst1 subst2 = M.fold (fun _ {var; term} -> function
+      let merge env subst1 subst2 = VarMap.fold (fun var term -> function
         | Some s  -> begin
           match unify env !!!var term ~scope:Var.non_local_scope s with
           | Some (_, s') -> Some s'
@@ -670,14 +669,16 @@ module Subst :
       ) subst1 (Some subst2)
 
       let is_subsumed env subst =
-        M.for_all (fun _ {var; term} ->
+        VarMap.for_all (fun var term ->
           match unify env !!!var term ~scope:Var.non_local_scope subst with
-          | None          -> false
           | Some ([], _)  -> true
-          | Some (_ , _)  -> false
+          | _             -> false
         )
 
   end
+
+module Int = struct type t = int let compare = (-) end
+module M = Map.Make(Int)
 
 exception Disequality_violated
 exception Disequality_fulfilled
