@@ -673,8 +673,16 @@ module Subst :
               | Some []        -> acc
               | None           -> None
               end
-            | Some x, _      -> extend {var=x; term=Obj.repr y} pair
-            | _     , Some y -> extend {var=y; term=Obj.repr x} pair
+            | Some x, _      ->
+              begin match x.Var.quant with
+              | Exist -> extend {var=x; term=Obj.repr y} pair
+              | Univ  -> None
+              end
+            | _     , Some y ->
+              begin match y.Var.quant with
+              | Exist -> extend {var=y; term=Obj.repr x} pair
+              | Univ  -> None
+              end
             | _ ->
                 let wx, wy = wrap (Obj.repr x), wrap (Obj.repr y) in
                 (match wx, wy with
@@ -1037,6 +1045,7 @@ module State =
       ; subst : Subst.t
       ; ctrs  : Disequality.t
       ; scope : Var.scope
+      ; rank  : Var.rank
       }
 
     let empty () =
@@ -1044,6 +1053,7 @@ module State =
       ; subst = Subst.empty
       ; ctrs  = Disequality.empty
       ; scope = Var.new_scope ()
+      ; rank  = 0
       }
 
     let env   {env;} = env
@@ -1057,9 +1067,9 @@ module State =
 
     let incr_scope {scope} as st = {st with scope = Var.new_scope ()}
 
-    let merge
-      {env=env1; subst=subst1; ctrs=ctrs1; scope=scope1}
-      {env=env2; subst=subst2; ctrs=ctrs2; scope=scope2} =
+    (* let merge
+      {env=env1; subst=subst1; ctrs=ctrs1; scope=scope1; rank=rank1}
+      {env=env2; subst=subst2; ctrs=ctrs2; scope=scope2; rank=rank2} =
       let env = Env.merge env1 env2 in
       match Subst.merge env subst1 subst2 with
       | None       -> None
@@ -1067,16 +1077,17 @@ module State =
         { env; subst
         ; ctrs  = Disequality.merge env ctrs1 ctrs2
         ; scope = Var.new_scope ()
-        }
+        ; rank  = max
+        } *)
 
     let project ({env; subst; ctrs} as st) x =
       {st with ctrs = Disequality.project env subst ctrs x}
 
-    let normalize ({env; subst; ctrs} as st) x =
+    let normalize ({env; subst; ctrs; rank} as st) x =
       match Disequality.normalize env subst ctrs x with
       | []    -> [{st with ctrs=Disequality.empty}]
       | ctrss ->
-        List.map (fun ctrs -> {env; subst; ctrs; scope = Var.new_scope ()}) ctrss
+        List.map (fun ctrs -> {env; subst; ctrs; scope = Var.new_scope (); rank}) ctrss
 
     let reify {env; subst; ctrs} x =
       Subst.deepwalk ~walk_ctrs:(Disequality.reify env subst ctrs) env subst x
@@ -1090,9 +1101,14 @@ let success st = Stream.Internal.single st
 let failure _  = Stream.Internal.nil
 
 let call_fresh f =
-  let open State in fun {env; scope} as st ->
-    let x, env' = Env.fresh ~scope ~rank:0 env in
-    f x {st with env=env'}
+  let open State in fun {env; scope; rank} as st ->
+    let x, env' = Env.fresh ~scope ~rank env in
+    f x {st with env=env'; rank=rank+1}
+
+let call_eigen f =
+  let open State in fun {env; scope; rank} as st ->
+    let x, env' = Env.eigen ~scope ~rank env in
+    f x {st with env=env'; rank=rank+1}
 
 let (===) (x: _ injected) y =
   let open State in fun {env; subst; ctrs; scope} as st ->
@@ -1143,6 +1159,24 @@ let conde = (?|)
 module Fresh =
   struct
     let succ prev f = call_fresh (fun x -> prev (f x))
+
+    let zero  f = f
+    let one   f = succ zero f
+    let two   f = succ one f
+    let three f = succ two f
+    let four  f = succ three f
+    let five  f = succ four f
+
+    let q     = one
+    let qr    = two
+    let qrs   = three
+    let qrst  = four
+    let pqrst = five
+  end
+
+module Eigen =
+  struct
+    let succ prev f = call_eigen (fun x -> prev (f x))
 
     let zero  f = f
     let one   f = succ zero f

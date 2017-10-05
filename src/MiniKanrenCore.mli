@@ -27,7 +27,7 @@ module Stream :
 
     (** Stream type *)
     type 'a t
-    
+
     (** Emptiness test *)
     val is_empty : 'a t -> bool
 
@@ -91,7 +91,7 @@ val logic :
 val to_logic : 'a -> 'a logic
 
 (** [from_logic x] makes a regular value from a logic one.
-    Raises exception [Not_a_value] if [x] contains free variables 
+    Raises exception [Not_a_value] if [x] contains free variables
 *)
 val from_logic : 'a logic -> 'a
 
@@ -110,7 +110,7 @@ val inj : ('a, 'b) injected -> ('a, 'b logic) injected
 val (!!) : 'a -> ('a, 'a logic) injected
 
 (** [prj x] returns a regular value from injected representation.
-    Raises exception [Not_a_value] if [x] contains free variables 
+    Raises exception [Not_a_value] if [x] contains free variables
 *)
 val prj : ('a, 'b) injected -> 'a
 
@@ -138,15 +138,15 @@ val disj : goal -> goal -> goal
 (** [|||] is a left-associative infix synonym for [disj] *)
 val (|||) : goal -> goal -> goal
 
-(** [?| [s1; s2; ...; sk]] calculates [s1 ||| (s2 ||| ... ||| sk)...)] for a non-empty list of goals 
-    (note the {i right} association) 
+(** [?| [s1; s2; ...; sk]] calculates [s1 ||| (s2 ||| ... ||| sk)...)] for a non-empty list of goals
+    (note the {i right} association)
 *)
 val (?|) : goal list -> goal
 
 (** [conde] is a synonym for [?|] *)
 val conde : goal list -> goal
 
-(** [?& [s1; s2; ...; sk]] calculates [s1 &&& (s2 && ... &&& sk)...)] for a non-empty list of goals 
+(** [?& [s1; s2; ...; sk]] calculates [s1 &&& (s2 && ... &&& sk)...)] for a non-empty list of goals
     (note the {i right} association)
 *)
 val (?&) : goal list -> goal
@@ -163,7 +163,33 @@ val failure : goal
 module Fresh :
   sig
     (** [succ num f] increments the number of free logic variables in
-        a goal; can be used to get rid of ``fresh'' syntax extension 
+        a goal; can be used to get rid of ``fresh'' syntax extension
+    *)
+    val succ : ('a -> 'b goal') -> ((_, _) injected -> 'a) -> 'b goal'
+
+    (** Zero logic parameters *)
+    val zero : 'a -> 'a
+
+    (** {3 One to five logic parameter(s)} *)
+    val one   : (_ injected ->                                                         goal) -> goal
+    val two   : (_ injected -> _ injected ->                                           goal) -> goal
+    val three : (_ injected -> _ injected -> _ injected ->                             goal) -> goal
+    val four  : (_ injected -> _ injected -> _ injected -> _ injected ->               goal) -> goal
+    val five  : (_ injected -> _ injected -> _ injected -> _ injected -> _ injected -> goal) -> goal
+
+    (** {3 One to five logic parameter(s), conventional names} *)
+    val q     : (_ injected ->                                                         goal) -> goal
+    val qr    : (_ injected -> _ injected ->                                           goal) -> goal
+    val qrs   : (_ injected -> _ injected -> _ injected ->                             goal) -> goal
+    val qrst  : (_ injected -> _ injected -> _ injected -> _ injected ->               goal) -> goal
+    val pqrst : (_ injected -> _ injected -> _ injected -> _ injected -> _ injected -> goal) -> goal
+  end
+
+(** {2 Combinators to produce eigen variables} *)
+module Eigen :
+  sig
+    (** [succ num f] increments the number of free logic variables in
+        a goal; can be used to get rid of ``eigen'' syntax extension
     *)
     val succ : ('a -> 'b goal') -> ((_, _) injected -> 'a) -> 'b goal'
 
@@ -187,9 +213,9 @@ module Fresh :
 
 (** {2 Top-level running primitives} *)
 
-(** [run n g h] runs a goal [g] with [n] logical parameters and passes reified results to the handler [h]. 
-    The number of parameters is encoded using variadic machinery {a la} Olivier Danvy and represented by 
-    a number of predefined numerals and successor function (see below). The reification replaces each variable, 
+(** [run n g h] runs a goal [g] with [n] logical parameters and passes reified results to the handler [h].
+    The number of parameters is encoded using variadic machinery {a la} Olivier Danvy and represented by
+    a number of predefined numerals and successor function (see below). The reification replaces each variable,
     passed to [g], with the stream of values, associated with that variable as the goal succeeds.
 
     Examples:
@@ -216,7 +242,7 @@ type helper
 exception Not_a_value
 
 (** Reification result *)
-class type ['a,'b] reified = 
+class type ['a,'b] reified =
 object
   (** Returns [true] if the term has any free logic variable inside *)
   method is_open: bool
