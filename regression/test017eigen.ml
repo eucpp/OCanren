@@ -20,5 +20,11 @@ let _ =
   runInt       (-1) q qh (REPR (fun q -> Eigen.two (fun x y -> x === y)      ));
 
   runInt       (-1) q qh (REPR (fun q -> Eigen.one (fun x   -> Fresh.one (fun y -> x === y))));
-  
+
+  runInt       (-1) q qh (REPR (fun q -> Eigen.one (fun x   -> x =/= !1)     ));
+  runInt       (-1) q qh (REPR (fun q -> Eigen.one (fun x   -> x =/= q)      ));
+  runInt       (-1) q qh (REPR (fun q -> Eigen.two (fun x y -> x =/= y)      ));
+
+  runInt       (-1) q qh (REPR (fun q -> Eigen.one (fun x   -> Fresh.one (fun y -> x =/= y))));
+
   ()

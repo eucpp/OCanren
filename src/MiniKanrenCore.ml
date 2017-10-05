@@ -301,22 +301,6 @@ module Var =
       assert (x.env = y.env);
       x.index - y.index
 
-    let unify x y =
-      if x.index = y.index
-      then Some []
-      else (
-        let helper x y =
-          if x.rank < y.rank
-          then Some [{var=x; term=Obj.repr y}]
-          else None
-        in
-        match x.quant, y.quant with
-        | Univ,  Exist  -> helper x y
-        | Exist, Univ   -> helper y x
-        | Exist, Exist  -> Some [{var=x; term=Obj.repr y}]
-        | Univ,  Univ   -> None
-      )
-
   end
 
 type ('a, 'b) injected = 'a
@@ -548,7 +532,9 @@ module Subst :
      *   Otherwise it returns a pair of prefix and new substituion.
      *   Prefix is a list of pairs (var, term) that were added to the original substituion.
      *)
-    val unify   : Env.t -> 'a -> 'a -> scope:Var.scope -> t -> (Var.binding list * t) option
+    val unify : scope:Var.scope -> Env.t -> 'a -> 'a -> t -> (Var.binding list * t) option
+
+    val disunify : Env.t -> 'a -> 'a -> t -> (Var.binding list * t) option
 
     (* [merge env s1 s2] merges two substituions *)
     val merge : Env.t -> t -> t -> t option
@@ -636,53 +622,67 @@ module Subst :
             in
             inner 0
 
-    let unify env x y ~scope main_subst =
-
-      (* The idea is to do the unification and collect the unification prefix during the process.
-         It is safe to modify variables on the go. There are two cases:
-         * if we do unification just after a conde, then the scope is already incremented and nothing goes into
-           the fresh variables.
-         * if we do unification after a fresh, then in case of failure it doesn't matter if
-           the variable is be distructively substituted: we will not look on it in future.
+    (* extend adds a binding to substituion
+      It is safe to modify variables on the go. There are two cases:
+      1) if we do unification just after a conde, then the scope is already incremented and nothing goes into
+         the fresh variables.
+      2) if we do unification after a fresh, then in case of failure it doesn't matter if
+         the variable is be distructively substituted: we will not look on it in future.
       *)
+    let extend ~scope env var term subst =
+      if occurs env var term subst then raise Occurs_check
+      else
+        assert (Env.var env var <> Env.var env term);
+        if scope = var.scope
+        then begin
+            var.subst <- Some term;
+            subst
+          end
+        else M.add var.index binding subst
 
-      let extend binding (prefix, sub1) =
-        let var, term = binding.Var.var, binding.Var.term in
-        if occurs env var term sub1 then raise Occurs_check
-        else
-          assert (Env.var env var <> Env.var env term);
-          let sub2 =
-            if scope = var.scope
-            then begin
-              var.subst <- Some term;
-              sub1
-            end
-            else M.add var.index binding sub1
-          in
-          Some (binding::prefix, sub2)
-      in
+    let unify ~disunify ~scope env x y subst =
+      (* We do the unification and collect the unification prefix during the process *)
       let rec helper x y : (Var.binding list * t) option -> (Var.binding list * t) option = function
         | None -> None
-        | Some ((delta, subs) as pair) as acc ->
-            let x = walk env subs x in
-            let y = walk env subs y in
+        | Some (delta, subst) as acc ->
+            (* unification helpers *)
+            let extend x y = Some ({var=x; term=Obj.repr y}::delta, extend ~scope env var term subst) in
+            (* unify_vars - inifies two variables *)
+            let unify_vars x y =
+              (* variables with same indexes are trivially unifiable *)
+              if x.index = y.index then acc
+              else (
+                (* helper unifies universally quntified [x] with existentially quantified [y] *)
+                let helper x y =
+                  (* universal variable should have lower rank (i.e. occurs in program early) *)
+                  if x.rank < y.rank
+                  then
+                    extend x y
+                  else
+                    (* in case of disunification we don't fail fast and
+                       continue gathering disequalities *)
+                    if disunify then acc else None
+                in
+                match x.quant, y.quant with
+                | Univ,  Exist  -> helper x y
+                | Exist, Univ   -> helper y x
+                | Exist, Exist  -> extend x y
+                | Univ,  Univ   -> None
+              )
+            (* unify_var_term - unifies variable and term *)
+            let unify_var_term x t =
+              match x.Var.quant with
+              | Exist -> extend x y
+              (* in case of disunification we don't fail fast and
+                 continue gathering disequalities *)
+              | Univ  -> if disunify then acc else None
+            in
+            let x = walk env subst x in
+            let y = walk env subst y in
             match Env.var env x, Env.var env y with
-            | Some x, Some y ->
-              begin match Var.unify x y with
-              | Some [binding] -> extend binding pair
-              | Some []        -> acc
-              | None           -> None
-              end
-            | Some x, _      ->
-              begin match x.Var.quant with
-              | Exist -> extend {var=x; term=Obj.repr y} pair
-              | Univ  -> None
-              end
-            | _     , Some y ->
-              begin match y.Var.quant with
-              | Exist -> extend {var=y; term=Obj.repr x} pair
-              | Univ  -> None
-              end
+            | Some x, Some y -> unify_vars x y
+            | Some x, _      -> unify_var_term x y
+            | _     , Some y -> unify_var_term y x
             | _ ->
                 let wx, wy = wrap (Obj.repr x), wrap (Obj.repr y) in
                 (match wx, wy with
@@ -704,8 +704,11 @@ module Subst :
                  | _ -> None
                 )
       in
-      try helper x y (Some ([], main_subst))
+      try helper x y (Some ([], subst))
       with Occurs_check -> None
+
+      let disunify = unify ~disunify:true ~scope:Var.non_local_scope
+      let unify    = unify ~disunify:false
 
       let merge env subst1 subst2 = M.fold (fun _ binding -> function
         | Some s  -> begin
