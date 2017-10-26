@@ -830,6 +830,15 @@ module Disequality :
      *)
     val extend : prefix:Subst.content list -> Env.t -> t -> t
 
+    (* [witness env subst diseq] - refines [diseq] in [subst],
+     *   obtaining a list of `witness` substitutions.
+     *   Each of these `witness` substitutions is more specialized than [subst] and violates [diseq].
+     *   This function is used to implement negation:
+     *   during negation we take disequalities, turn them into substitutions
+     *   and continue search.
+     *)
+    val witness : Env.t -> Subst.t -> t -> Subst.t list
+
     (* [merge env diseq1 diseq2] - merges two disequality stores *)
     val merge : Env.t -> t -> t -> t
 
@@ -1080,6 +1089,9 @@ module Disequality :
             (delta, delta_subst, s)::acc
       ) [] t
 
+    let witness env subst t =
+      refine env subst t |> List.map (fun _,_,subst -> subst)
+
     let to_cnf env subst t =
       refine env subst t |> List.map (fun delta,_,_ -> delta)
 
@@ -1183,6 +1195,13 @@ module State =
       ; scope = Var.new_scope ()
       }
 
+    let reset {env} =
+      { env
+      ; subst = Subst.empty
+      ; ctrs  = Disequality.empty
+      ; scope = Var.new_scope ()
+      }
+
     let env   {env} = env
     let subst {subst} = subst
     let constraints {ctrs} = ctrs
@@ -1216,6 +1235,27 @@ module State =
       | Some (prefix, _) ->
           let ctrs' = Disequality.extend ~prefix env ctrs in
           Some {st with ctrs=ctrs'}
+
+    let invert {env; subst; ctrs} =
+      let make witness =
+        { env
+        ; subst = witness
+        ; ctrs  = Disequality.empty
+        ; scope = Var.new_scope ()
+        }
+      in
+      let witnesses = List.map make @@ Disequality.witness env subst ctrs in
+      match Subst.split subst with
+      | []      -> witnesses
+      | prefix  ->
+        let cex =
+          { env
+          ; subst = Subst.empty
+          ; ctrs  = Disequality.of_disj env prefix
+          ; scope = Var.new_scope ()
+          }
+        in
+        cex::witnesses
 
     let merge
       {env=env1; subst=subst1; ctrs=ctrs1; scope=scope1}
@@ -1308,11 +1348,19 @@ let (?|) gs st =
 let conde = (?|)
 
 let (?~) g st =
-  let stream = g st in
-  if (Stream.is_empty @@ Stream.of_mkstream stream) then
-    Stream.Internal.single st
-  else
-    Stream.Internal.nil
+  let merge l1 l2 =
+    ListLabels.map l1
+      ~f:(fun st1 -> ListLabels.map (Lazy.force l2) ~f:(
+        fun st2 -> State.merge st1 st2
+      )) |>
+    List.concat |>
+    ListLabels.fold_left ~init:[]
+      ~f:(fun acc -> function None -> acc | Some s -> s::acc)
+  in
+  g @@ State.reset st |>
+  Stream.Internal.map State.invert |>
+  Stream.Internal.fold merge (Lazy.from_val [st]) |>
+  Stream.Internal.of_list
 
 module Fresh =
   struct
