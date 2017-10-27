@@ -1375,7 +1375,11 @@ let (?|) gs st =
 
 let conde = (?|)
 
-let (?~) g st =
+let (?~) g =
+  let open State in fun ({env; subst} as st) ->
+  let invert ({subst=subst'} as st') =
+    State.invert @@ {st' with subst = Subst.diff env subst' subst}
+  in
   let merge l1 l2 =
     ListLabels.map l1
       ~f:(fun st1 -> ListLabels.map (Lazy.force l2) ~f:(
@@ -1385,8 +1389,8 @@ let (?~) g st =
     ListLabels.fold_left ~init:[]
       ~f:(fun acc -> function None -> acc | Some s -> s::acc)
   in
-  g @@ State.reset st |>
-  Stream.Internal.map State.invert |>
+  g @@ {st with ctrs=Disequality.empty; scope=Var.new_scope ()} |>
+  Stream.Internal.map invert |>
   Stream.Internal.fold merge (Lazy.from_val [st]) |>
   Stream.Internal.of_list
 
