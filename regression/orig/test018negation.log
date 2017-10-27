@@ -74,3 +74,5 @@ fun q ->
   MiniKanren.Fresh.one
     (fun n -> delay (fun () -> conj ((===) n (nat 3)) ((?~) (peano n)))), all answers {
 }
+fun q -> (?~) ((|||) ((===) q !1) ((=/=) q !1)), all answers {
+}

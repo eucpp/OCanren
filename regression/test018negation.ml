@@ -44,7 +44,7 @@ let _ =
   runNat       (-1) q qh (REPR (fun q -> (fresh (n) (n === nat 3) ?~(peano n))));
 
   (* test contradiction *)
-  (* runInt       (-1) q qh (REPR (fun q -> ?~((q === !1) ||| (q =/= !1)))); *)
+  runInt       (-1) q qh (REPR (fun q -> ?~((q === !1) ||| (q =/= !1))))
 
   (* test `fresh` under negation *)
 

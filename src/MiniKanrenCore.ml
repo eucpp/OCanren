@@ -1286,11 +1286,16 @@ module State =
       let env = Env.merge env1 env2 in
       match Subst.merge env subst1 subst2 with
       | None       -> None
-      | Some subst -> Some
-        { env; subst
-        ; ctrs  = Disequality.merge env ctrs1 ctrs2
-        ; scope = Var.new_scope ()
-        }
+      | Some subst ->
+        try
+          let ctrs1 = Disequality.check ~prefix:(Subst.split subst2) env subst ctrs1 in
+          let ctrs2 = Disequality.check ~prefix:(Subst.split subst1) env subst ctrs2 in
+          Some
+          { env; subst
+          ; ctrs  = Disequality.merge env ctrs1 ctrs2
+          ; scope = Var.new_scope ()
+          }
+        with Disequality_violated -> None
 
     let project ({env; subst; ctrs} as st) x =
       let cs = Disequality.to_cnf env subst ctrs in
