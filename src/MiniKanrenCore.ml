@@ -622,27 +622,37 @@ module Subst :
   struct
     type content = {var : Var.t; term : Obj.t }
 
-    type t       = Obj.t VarMap.t
+    type timestamp = int
 
-    let empty = VarMap.empty
+    type t =
+      { subst : Obj.t VarMap.t
+      ; ts    : timestamp
+      }
 
-    let of_list =
-      ListLabels.fold_left ~init:empty ~f:(fun subst cnt ->
+    let init subst = {subst; ts=0}
+
+    let empty = init VarMap.empty
+
+    let of_list bs = init @@
+      ListLabels.fold_left bs ~init:VarMap.empty ~f:(fun subst cnt ->
         VarMap.add cnt.var cnt.term subst
       )
 
-    let split s = VarMap.fold (fun var term xs -> {var; term}::xs) s []
+    let split {subst} = VarMap.fold (fun var term xs -> {var; term}::xs) subst []
 
-    let rec walk env subst t =
-      if Env.is_var env t
-      then
-        let v = (!!!t : Var.t) in
-        match v.subst with
-        | Some term -> walk env subst !!!term
-        | None ->
-            try walk env subst (Obj.obj (VarMap.find v subst))
-            with Not_found -> t
-      else t
+    let walk env {subst} x =
+      let rec helper x =
+        if Env.is_var env x
+        then
+          let v = (!!!x : Var.t) in
+          match v.subst with
+          | Some term -> helper !!!term
+          | None ->
+              try helper (Obj.obj (VarMap.find v subst))
+              with Not_found -> x
+        else x
+      in
+      helper x
 
     let rec project env subst x =
       let var = walk env subst x in
@@ -668,7 +678,7 @@ module Subst :
     let free_vars env subst x =
       Env.free_vars env @@ project env subst x
 
-    let is_bound = VarMap.mem
+    let is_bound var {subst} = VarMap.mem var subst
 
     let rec occurs env var term subst =
       let y = walk env subst term in
@@ -686,8 +696,8 @@ module Subst :
          | Invalid n when n = Obj.closure_tag -> false
          | Invalid n -> failwith (sprintf "OCanren fatal (Subst.occurs): invalid value (%d)" n)
 
-    let extend ~scope env var term subst =
-      if occurs env var term subst then raise Occurs_check
+    let extend ~scope env var term ({ts; subst} as t) =
+      if occurs env var term t then raise Occurs_check
       else
         assert (Env.var env var <> Env.var env term);
         (* It is safe to modify variables destructively if the case of scopes match.
@@ -700,12 +710,13 @@ module Subst :
         if scope = var.Var.scope
         then begin
           var.subst <- Some (Obj.repr term);
-          subst
+          {ts=ts+1; subst}
         end
-          else VarMap.add var (Obj.repr term) subst
+        else
+          let subst = VarMap.add var (Obj.repr term) subst in
+          {ts=ts+1; subst}
 
     let unify ~scope env subst x y =
-
       (* The idea is to do the unification and collect the unification prefix during the process *)
       let extend var term (prefix, subst) =
         let var = (!!!var: Var.t) in
@@ -745,21 +756,23 @@ module Subst :
       try helper !!!x !!!y (Some ([], subst))
       with Occurs_check -> None
 
-      let merge env subst1 subst2 = VarMap.fold (fun var term -> function
-        | Some s  -> begin
-          match unify ~scope:Var.non_local_scope env s !!!var term with
-          | Some (_, s') -> Some s'
-          | None         -> None
-          end
-        | None    -> None
-      ) subst1 (Some subst2)
+      let merge env ({ts=ts1} as s1) ({ts=ts2;} as s2) =
+        let s1, s2 = if ts1 > ts2 then (s2, s1) else (s1, s2) in
+        VarMap.fold (fun var term -> function
+          | Some s  -> begin
+            match unify ~scope:Var.non_local_scope env s !!!var term with
+            | Some (_, s') -> Some s'
+            | None         -> None
+            end
+          | None    -> None
+        ) s1.subst (Some s2)
 
-      let is_subsumed env subst =
+      let is_subsumed env s1 s2 =
         VarMap.for_all (fun var term ->
-          match unify ~scope:Var.non_local_scope env subst !!!var term with
+          match unify ~scope:Var.non_local_scope env s1 !!!var term with
           | Some ([], _)  -> true
           | _             -> false
-        )
+        ) s2.subst
 
   end
 
