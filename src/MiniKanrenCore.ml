@@ -371,6 +371,7 @@ module Var =
   end
 
 module VarSet = Set.Make(Var)
+module VarMap = Map.Make(Var)
 module VarTbl = Hashtbl.Make(Var)
 
 type ('a, 'b) injected = 'a
@@ -497,9 +498,6 @@ let from_logic = function
 | Var (_, _) -> raise Not_a_value
 
 let (!!) x = inj (lift x)
-
-module VarSet = Set.Make(Var)
-module VarMap = Map.Make(Var)
 
 module Env :
   sig
@@ -714,7 +712,7 @@ module Subst :
         let subst = extend ~scope env var term subst in
         ({var; term = Obj.repr term}::prefix, subst)
       in
-      let rec helper x y : (content list * t) option -> _ = function
+      let rec helper x y : (content list * t) option -> (content list * t) option = function
         | None -> None
         | Some ((_, subst) as pair) as acc ->
             let x = walk env subst x in
@@ -758,7 +756,7 @@ module Subst :
 
       let is_subsumed env subst =
         VarMap.for_all (fun var term ->
-          match unify env !!!var term ~scope:Var.non_local_scope subst with
+          match unify ~scope:Var.non_local_scope env subst !!!var term with
           | Some ([], _)  -> true
           | _             -> false
         )
