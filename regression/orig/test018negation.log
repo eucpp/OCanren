@@ -1,0 +1,76 @@
+fun q -> (?~) ((===) q !1), all answers {
+q=_.10 [=/= 1];
+}
+fun q -> (?~) ((=/=) q !1), all answers {
+q=1;
+}
+fun q -> (&&&) ((===) q !1) ((?~) ((===) q !2)), all answers {
+q=1;
+}
+fun q ->
+  MiniKanren.Fresh.two
+    (fun x y ->
+       delay
+         (fun () ->
+            conj ((|||) ((=/=) x !1) ((=/=) y !2)) ((===) q ((!!) [x; y])))), all answers {
+q=[_.11 [=/= 1]; _.12];
+q=[_.11; _.12 [=/= 2]];
+}
+fun q ->
+  MiniKanren.Fresh.two
+    (fun x y ->
+       delay
+         (fun () ->
+            conj ((&&&) ((=/=) x !1) ((=/=) y !2)) ((===) q ((!!) [x; y])))), all answers {
+q=[_.11 [=/= 1]; _.12 [=/= 2]];
+}
+fun q ->
+  MiniKanren.Fresh.two
+    (fun x y ->
+       delay
+         (fun () ->
+            conj ((?~) ((&&&) ((===) x !1) ((===) y !2)))
+              ((===) q ((!!) [x; y])))), all answers {
+q=[_.11 [=/= 1]; _.12];
+q=[_.11; _.12 [=/= 2]];
+}
+fun q ->
+  MiniKanren.Fresh.two
+    (fun x y ->
+       delay
+         (fun () ->
+            conj ((?~) ((|||) ((===) x !1) ((===) y !2)))
+              ((===) q ((!!) [x; y])))), all answers {
+q=[_.11 [=/= 1]; _.12 [=/= 2]];
+}
+fun q ->
+  MiniKanren.Fresh.two
+    (fun x y ->
+       delay
+         (fun () -> conj ((===) q ((!!) [x; y])) ((=/=) q ((!!) [!1; !2])))), all answers {
+q=[_.11 [=/= 1]; _.12];
+q=[_.11; _.12 [=/= 2]];
+}
+fun q ->
+  MiniKanren.Fresh.two
+    (fun x y ->
+       delay
+         (fun () ->
+            conj ((===) q ((!!) [x; y]))
+              ((?~) ((&&&) ((===) x !1) ((===) y !2))))), all answers {
+q=[_.11 [=/= 1]; _.12];
+q=[_.11; _.12 [=/= 2]];
+}
+fun q ->
+  MiniKanren.Fresh.one (fun x -> delay (fun () -> (=/=) q ((!!) [!1; x; !2]))), all answers {
+q=_.10 [=/= [1; _.11; 2]];
+}
+fun q ->
+  MiniKanren.Fresh.one
+    (fun x -> delay (fun () -> (?~) ((===) q ((!!) [!1; x; !2])))), all answers {
+q=_.10 [=/= [1; _.11; 2]];
+}
+fun q ->
+  MiniKanren.Fresh.one
+    (fun n -> delay (fun () -> conj ((===) n (nat 3)) ((?~) (peano n)))), all answers {
+}
