@@ -359,11 +359,11 @@ module Var =
     }
 
     let equal x y =
-      assert (x.env = y.env);
+      (* assert (x.env = y.env); *)
       x.index = y.index
 
     let compare x y =
-      assert (x.env = y.env);
+      (* assert (x.env = y.env); *)
       x.index - y.index
 
     let hash x = Hashtbl.hash x.index
@@ -503,25 +503,51 @@ module Env :
   sig
     type t
 
-    val empty     : unit -> t
-    val create    : anchor:Var.env -> t
-    val fresh     : (*?name:string ->*) scope:Var.scope -> t -> 'a
-    val var       : t -> 'a -> int option
-    val is_var    : t -> 'a -> bool
-    val free_vars : t -> 'a -> VarSet.t
-    val merge     : t -> t -> t
+    val empty       : unit -> t
+    val create      : anchor:Var.env -> t
+    val fork        : t -> t
+    val fresh       : (*?name:string ->*) scope:Var.scope -> t -> 'a
+    val var         : t -> 'a -> int option
+    val is_var      : t -> 'a -> bool
+    val is_wildcard : t -> Var.t -> bool
+    val free_vars   : t -> 'a -> VarSet.t
+    val merge       : t -> t -> t
   end =
   struct
-    type t = {anchor : Var.env; mutable next : int}
+    type t =
+      { anchor        : Var.env
+      (* We establish a parent-of relation on environments (and consequently ancestor-of relation).
+       * It is useful for `negation`.
+       * Variables from child environments quantified `universaly` in parent environments.
+       * Disequality constraints that envolve this kind of variables are handled differently.
+       *)
+      ; parent        : t option
+      ; mutable next  : int
+      }
+
+    let env_tbl = Hashtbl.create 31
 
     let last_anchor = ref 11
     let first_var = 10
 
     let empty () =
       incr last_anchor;
-      {anchor = !last_anchor; next = first_var}
+      let env =
+        {anchor = !last_anchor; parent = None; next = first_var}
+      in
+      Hashtbl.add env_tbl !last_anchor env;
+      env
 
-    let create ~anchor = {anchor; next = first_var}
+    let create ~anchor =
+      {anchor; parent = None; next = first_var}
+
+    let fork ({anchor; next} as env) =
+      incr last_anchor;
+      let env' =
+        {anchor = !last_anchor; parent = Some env; next}
+      in
+      Hashtbl.add env_tbl !last_anchor env';
+      env'
 
     let fresh (*?name *) ~scope e =
       let v = !!!(Var.make ~env:e.anchor ~scope e.next) in
@@ -535,6 +561,13 @@ module Env :
       let v = Var.make ~env ~scope index in
       Obj.tag !!!v, Obj.size !!!v
 
+    let is_ancestor_env ances desc =
+      let rec helper = function
+        | Some env  -> if env.anchor = ances.anchor then true else helper env.parent
+        | None      -> false
+      in
+      helper (Some desc)
+
     let var env x =
       let t = !!! x in
       if Obj.tag  t = var_tag  &&
@@ -542,12 +575,17 @@ module Env :
          (let token = (!!!x : Var.t).Var.anchor in (Obj.is_block !!!token) && token == !!!Var.global_anchor)
       then
         let q = (!!!x : Var.t).Var.env in
-        if (Obj.is_int !!!q) (*&& q == !!!env.anchor*)
+        if (Obj.is_int !!!q) (*&& ((q = env.anchor) || (is_ancestor_env qenv env) || (is_ancestor_env env qenv))*)
         then Some (!!!x : Var.t).index
         else failwith "OCanren fatal (Env.var): wrong environment"
       else None
 
     let is_var env v = None <> var env v
+
+    let is_wildcard env var =
+      if env.anchor = var.Var.env
+      then false
+      else is_ancestor_env env @@ Hashtbl.find env_tbl var.Var.env
 
     let free_vars env x =
       let rec helper fv t =
@@ -567,9 +605,15 @@ module Env :
       in
       helper VarSet.empty (Obj.repr x)
 
-    let merge {anchor=anchor1; next=next1} {anchor=anchor2; next=next2} =
-      assert (anchor1 == anchor2);
-      {anchor=anchor1; next = max next1 next2}
+    let merge ({anchor=anchor1; next=next1} as env1) ({anchor=anchor2; next=next2} as env2) =
+      (* assert (anchor1 == anchor2); *)
+      assert ((is_ancestor_env env1 env2) || (is_ancestor_env env2 env1));
+      let env =
+        if is_ancestor_env env1 env2
+        then env1
+        else env2
+      in
+      {env with next = max next1 next2}
   end
 
 module Subst :
@@ -713,12 +757,12 @@ module Subst :
          * 2) If we do unification after a fresh, then in case of failure it doesn't matter if
          *    the variable is be distructively substituted: we will not look on it in future.
          *)
-        if scope = var.Var.scope
+        (* if scope = var.Var.scope
         then begin
           var.subst <- Some (Obj.repr term);
           {tsnext=tsnext+1; subst}
         end
-        else
+        else *)
           let cnt = {ts = tsnext; obj = Obj.repr term} in
           let subst = VarMap.add var cnt subst in
           {tsnext=tsnext+1; subst}
@@ -907,7 +951,7 @@ module Disequality :
         type t
 
         (* [of_list diseqs] build single disjunction from list of disequalities *)
-        val of_list : Subst.binding list -> t
+        val of_list : Env.t -> Subst.binding list -> t
 
         (* [check env subst disj] - checks that disjunction of disequalities is
          *   not violated in (current) substitution.
@@ -936,12 +980,22 @@ module Disequality :
         type t = { sample : Subst.binding; unchecked : Subst.binding list }
 
         let choose_sample unchecked =
-          assert (unchecked <> []);
-          { sample = List.hd unchecked; unchecked = List.tl unchecked; }
+          if unchecked = []
+          then raise Disequality_violated
+          else { sample = List.hd unchecked; unchecked = List.tl unchecked; }
+
+        let filter_wildcard env =
+          let is_wildcard =
+            let open Subst in fun {var; term} ->
+            (Env.is_wildcard env var) ||
+            (if Env.is_var env term then Env.is_wildcard env !!!term else false)
+          in
+          List.filter (fun b -> not @@ is_wildcard b)
 
         (* TODO check that list is valid substitution
            (i.e. no different disequalities for same variable. Example: (x =/= 1) || (x =/= 2) is invalid) *)
-        let of_list = choose_sample
+        let of_list env bs =
+          filter_wildcard env bs |> choose_sample
 
         type status =
           | Fulfiled
@@ -958,7 +1012,9 @@ module Disequality :
         let rec check env subst {sample; unchecked} =
           match refine' env subst sample with
           | Fulfiled            -> raise Disequality_fulfilled
-          | Refined (delta, _)  -> choose_sample (delta @ unchecked)
+          | Refined (delta, _)  ->
+            let delta = filter_wildcard env delta in
+            choose_sample (delta @ unchecked)
           | Violated            ->
             match unchecked with
             | [] -> raise Disequality_violated
@@ -1027,7 +1083,7 @@ module Disequality :
       if prefix=[]
       then cstore
       else
-        let disj = Disjunction.of_list prefix in
+        let disj = Disjunction.of_list env prefix in
         Index.add (Disjunction.index disj) disj cstore
 
     let of_disj env disjs =
@@ -1290,9 +1346,10 @@ module State =
         try
           let ctrs1 = Disequality.check ~prefix:(Subst.split subst2) env subst ctrs1 in
           let ctrs2 = Disequality.check ~prefix:(Subst.split subst1) env subst ctrs2 in
+          let ctrs = Disequality.merge env ctrs1 ctrs2 in
+          let ctrs = Disequality.of_cnf env @@ Disequality.to_cnf env subst ctrs in
           Some
-          { env; subst
-          ; ctrs  = Disequality.merge env ctrs1 ctrs2
+          { env; subst; ctrs
           ; scope = Var.new_scope ()
           }
         with Disequality_violated -> None
@@ -1389,7 +1446,10 @@ let (?~) g =
     ListLabels.fold_left ~init:[]
       ~f:(fun acc -> function None -> acc | Some s -> s::acc)
   in
-  g @@ {st with ctrs=Disequality.empty; scope=Var.new_scope ()} |>
+  let st' =
+    {st with env=Env.fork env; ctrs=Disequality.empty; scope=Var.new_scope ()}
+  in
+  g st' |>
   Stream.Internal.map invert |>
   Stream.Internal.fold merge (Lazy.from_val [st]) |>
   Stream.Internal.of_list
