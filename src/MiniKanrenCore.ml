@@ -660,6 +660,9 @@ module Subst :
     (* [merge env s1 s2] - merges two substituions *)
     val merge : Env.t -> t -> t -> t option
 
+    (* [merge_disjoint env s1 s2] - merge two disjoint substituions *)
+    val merge_disjoint : Env.t -> t -> t -> t
+
     (* [diff env s1 s2] - takes a difference between [s1] and [s2],
      *   i.e. all bindings from s1 that is absent in s2
      *)
@@ -817,6 +820,15 @@ module Subst :
             end
           | None    -> None
         ) s1.subst (Some s2)
+
+      let merge_disjoint env {tsnext=ts1; subst=s1} {subst=s2} =
+        let s =
+          VarMap.fold (fun var {obj} s ->
+            assert (not @@ VarMap.mem var s);
+            VarMap.add var {ts=ts1; obj} s
+          ) s2 s1
+        in
+        {tsnext=ts1+1; subst=s}
 
       let diff env {tsnext=ts1; subst} {tsnext=ts2} =
         assert (ts1 >= ts2);
@@ -977,25 +989,34 @@ module Disequality :
         val reify : Var.t -> t -> 'a
       end =
       struct
-        type t = { sample : Subst.binding; unchecked : Subst.binding list }
+        type t =
+          { sample    : Subst.binding
+          ; unchecked : Subst.binding list
+          ; univ      : Subst.t
+          }
 
-        let choose_sample unchecked =
-          if unchecked = []
-          then raise Disequality_violated
-          else { sample = List.hd unchecked; unchecked = List.tl unchecked; }
-
-        let filter_wildcard env =
+        (* takes a list of bindings and splits it to two lists;
+         * first list contains bindings of existentially quantified variables,
+         * second - bindings of universaly quantified variables.
+         *)
+        let split env =
           let is_wildcard =
             let open Subst in fun {var; term} ->
             (Env.is_wildcard env var) ||
             (if Env.is_var env term then Env.is_wildcard env !!!term else false)
           in
-          List.filter (fun b -> not @@ is_wildcard b)
+          List.partition (fun b -> not @@ is_wildcard b)
+
+        let choose_sample univ unchecked =
+          if unchecked = []
+          then raise Disequality_violated
+          else { sample = List.hd unchecked; unchecked = List.tl unchecked; univ }
 
         (* TODO check that list is valid substitution
            (i.e. no different disequalities for same variable. Example: (x =/= 1) || (x =/= 2) is invalid) *)
         let of_list env bs =
-          filter_wildcard env bs |> choose_sample
+          let exist, univ = split env bs in
+          choose_sample (Subst.of_list univ) exist
 
         type status =
           | Fulfiled
@@ -1009,18 +1030,21 @@ module Disequality :
           | Some ([], _)          -> Violated
           | Some (prefix, subst)  -> Refined (prefix, subst)
 
-        let rec check env subst {sample; unchecked} =
+        let rec check env subst {sample; unchecked; univ} =
+          let subst = Subst.merge_disjoint env subst univ in
           match refine' env subst sample with
           | Fulfiled            -> raise Disequality_fulfilled
           | Refined (delta, _)  ->
-            let delta = filter_wildcard env delta in
-            choose_sample (delta @ unchecked)
+            let exist, univ' = split env delta in
+            let univ = Subst.merge_disjoint env univ @@ Subst.of_list univ' in
+            choose_sample univ (delta @ unchecked)
           | Violated            ->
             match unchecked with
             | [] -> raise Disequality_violated
-            | ds -> check env subst @@ choose_sample ds
+            | ds -> check env subst @@ choose_sample univ ds
 
-        let refine env subst {sample; unchecked} =
+        let refine env subst {sample; unchecked; univ} =
+          let subst  = Subst.merge_disjoint env subst univ in
           let result = ListLabels.fold_left (sample::unchecked) ~init:(Some ([], subst))
                 ~f:(fun acc diseq -> match acc with
                     | None -> None

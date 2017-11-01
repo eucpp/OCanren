@@ -41,16 +41,16 @@ let _ =
   runIList     (-1) q qh (REPR (fun q -> (fresh (x) ?~(q === !![!1; x; !2]))));
 
   (* test that negation of infinite goals is able to terminate if arguments are ground enough *)
-  (* runNat       (-1) q qh (REPR (fun q -> (fresh (n) (n === nat 3) ?~(peano n)))); *)
+  runNat       (-1) q qh (REPR (fun q -> (fresh (n) (n === nat 3) ?~(peano n))));
 
   (* test contradiction *)
-  runInt       (-1) q qh (REPR (fun q -> ?~((q === !1) ||| (q =/= !1))));
+  runInt       (-1) q qh (REPR (fun q -> ?~((q === !1) ||| (q =/= !1))))
 
   (* test `fresh` under negation *)
 
   (* these goals must fail because there is [x] such that [x === 1] (or [x === 1 \/ x === 2]) *)
-  runInt       (-1) q qh (REPR (fun q -> ?~(fresh (x) (x === !1))));
-  runInt       (-1) q qh (REPR (fun q -> ?~(fresh (x) ((x === !1) ||| (x === !2)))))
+  (* runInt       (-1) q qh (REPR (fun q -> ?~(fresh (x) (x === !1))));
+  runInt       (-1) q qh (REPR (fun q -> ?~(fresh (x) ((x === !1) ||| (x === !2))))) *)
 
   (* these goals must fail by the same reason *)
   (* runInt       (-1) q  qh  (REPR (fun q   -> (q === !1) &&& ?~(fresh (x) (x === q))));
