@@ -1306,11 +1306,6 @@ type goal = State.t Stream.t goal'
 let success st = Stream.single st
 let failure _  = Stream.nil
 
-let call_fresh f =
-  let open State in fun ({env; scope} as st) ->
-  let x = Env.fresh ~scope env in
-  f x st
-
 let (===) x y st =
   match State.unify x y st with
   | None   -> Stream.nil
@@ -1343,6 +1338,38 @@ let (?|) gs st =
   inner gs |> (fun g -> Stream.from_fun (fun () -> g st))
 
 let conde = (?|)
+
+let call_fresh f =
+  let open State in fun ({env; scope} as st) ->
+  let x = Env.fresh ~scope env in
+  f x st
+
+module Fresh =
+  struct
+    let succ prev f = call_fresh (fun x -> prev (f x))
+
+    let zero  f = f
+    let one   f = succ zero f
+    let two   f = succ one f
+
+    (* N.B. Manual inlining of numerals will speed-up OCanren a bit (mainly because of less memory consumption) *)
+    (* let two   g = fun st ->
+      let scope = State.scope st in
+      let env = State.env st in
+      let q = Env.fresh ~scope env in
+      let r = Env.fresh ~scope env in
+      g q r st *)
+
+    let three f = succ two f
+    let four  f = succ three f
+    let five  f = succ four f
+
+    let q     = one
+    let qr    = two
+    let qrs   = three
+    let qrst  = four
+    let pqrst = five
+  end
 
 (* ******************************************************************************* *)
 (* ************************** Reification stuff ********************************** *)
@@ -1556,33 +1583,6 @@ let from_logic = function
 | Var (_, _) -> raise Not_a_value
 
 let (!!) x = inj (lift x)
-
-module Fresh =
-  struct
-    let succ prev f = call_fresh (fun x -> prev (f x))
-
-    let zero  f = f
-    let one   f = succ zero f
-    let two   f = succ one f
-
-    (* N.B. Manual inlining of numerals will speed-up OCanren a bit (mainly because of less memory consumption) *)
-    (* let two   g = fun st ->
-      let scope = State.scope st in
-      let env = State.env st in
-      let q = Env.fresh ~scope env in
-      let r = Env.fresh ~scope env in
-      g q r st *)
-
-    let three f = succ two f
-    let four  f = succ three f
-    let five  f = succ four f
-
-    let q     = one
-    let qr    = two
-    let qrs   = three
-    let qrst  = four
-    let pqrst = five
-  end
 
 class type ['a,'b] reified = object
   method is_open : bool
