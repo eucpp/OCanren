@@ -293,6 +293,9 @@ module Var =
     let valid_anchor anchor =
       anchor == global_anchor
 
+    let reify r {index; constraints} =
+      Var (index, List.map (fun x -> r @@ Obj.obj x) constraints)
+
     let equal x y =
       assert (x.env = y.env);
       x.index = y.index
@@ -489,221 +492,6 @@ module Term :
   end
 
 let (!!!) = Obj.magic
-
-type helper = < isVar : 'a . 'a -> bool >
-
-include (struct
-type ('a, 'b) injected = 'a
-module type T1 =
-  sig
-    type 'a t
-    val fmap : ('a -> 'b) -> 'a t -> 'b t
-  end
-
-module type T2 =
-  sig
-    type ('a, 'b) t
-    val fmap : ('a -> 'c) -> ('b -> 'd) -> ('a, 'b) t -> ('c, 'd) t
-  end
-
-module type T3 =
-  sig
-    type ('a, 'b, 'c) t
-    val fmap : ('a -> 'q) -> ('b -> 'r) -> ('c -> 's) -> ('a, 'b, 'c) t -> ('q, 'r, 's) t
-  end
-
-module type T4 =
-  sig
-    type ('a, 'b, 'c, 'd) t
-    val fmap : ('a -> 'q) -> ('b -> 'r) -> ('c -> 's) -> ('d -> 't) -> ('a, 'b, 'c, 'd) t -> ('q, 'r, 's, 't) t
-  end
-
-module type T5 =
-  sig
-    type ('a, 'b, 'c, 'd, 'e) t
-    val fmap : ('a -> 'q) -> ('b -> 'r) -> ('c -> 's) -> ('d -> 't) -> ('e -> 'u) -> ('a, 'b, 'c, 'd, 'e) t -> ('q, 'r, 's, 't, 'u) t
-  end
-
-module type T6 =
-  sig
-    type ('a, 'b, 'c, 'd, 'e, 'f) t
-    val fmap : ('a -> 'q) -> ('b -> 'r) -> ('c -> 's) -> ('d -> 't) -> ('e -> 'u) -> ('f -> 'v) -> ('a, 'b, 'c, 'd, 'e, 'f) t -> ('q, 'r, 's, 't, 'u, 'v) t
-  end
-
-let to_var (c : helper) x r =
-  if c#isVar x
-  then
-    let x : Var.t = !!!x in
-    !!!(Var (x.index, List.map (!!!(r c)) x.Var.constraints))
-  else failwith "OCanren fatal (to_var): not a logic variable"
-
-module Fmap (T : T1) =
-  struct
-    external distrib : ('a,'b) injected T.t -> ('a T.t, 'b T.t) injected = "%identity"
-
-    let rec reify r (c : helper) x =
-      if c#isVar x
-      then to_var c x (reify r)
-      else Value (T.fmap (r c) x)
-  end
-
-module Fmap2 (T : T2) =
-  struct
-    external distrib : (('a,'b) injected, ('c, 'd) injected) T.t -> (('a, 'b) T.t, ('c, 'd) T.t) injected = "%identity"
-
-    let rec reify r1 r2 (c : helper) x =
-      if c#isVar x
-      then to_var c x (reify r1 r2)
-      else Value (T.fmap (r1 c) (r2 c) x)
-  end
-
-module Fmap3 (T : T3) =
-  struct
-    external distrib : (('a, 'b) injected, ('c, 'd) injected, ('e, 'f) injected) T.t -> (('a, 'c, 'e) T.t, ('b, 'd, 'f) T.t) injected = "%identity"
-
-    let rec reify r1 r2 r3 (c : helper) x =
-      if c#isVar x then to_var c x (reify r1 r2 r3)
-      else Value (T.fmap (r1 c) (r2 c) (r3 c) x)
-end
-
-module Fmap4 (T : T4) = struct
-  external distrib : (('a,'b) injected, ('c, 'd) injected, ('e, 'f) injected, ('g, 'h) injected) T.t ->
-                     (('a, 'c, 'e, 'g) T.t, ('b, 'd, 'f, 'h) T.t) injected = "%identity"
-
-  let rec reify r1 r2 r3 r4 (c : helper) x =
-    if c#isVar x
-    then to_var c x (reify r1 r2 r3 r4)
-    else Value (T.fmap (r1 c) (r2 c) (r3 c) (r4 c) x)
-end
-
-module Fmap5 (T : T5) = struct
-  external distrib : (('a,'b) injected, ('c, 'd) injected, ('e, 'f) injected, ('g, 'h) injected, ('i, 'j) injected) T.t ->
-                     (('a, 'c, 'e, 'g, 'i) T.t, ('b, 'd, 'f, 'h, 'j) T.t) injected = "%identity"
-
-  let rec reify r1 r2 r3 r4 r5 (c : helper) x =
-    if c#isVar x
-    then to_var c x (reify r1 r2 r3 r4 r5)
-    else Value (T.fmap (r1 c) (r2 c) (r3 c) (r4 c) (r5 c) x)
-end
-
-module Fmap6 (T : T6) = struct
-  external distrib : (('a,'b) injected, ('c, 'd) injected, ('e, 'f) injected, ('g, 'h) injected, ('i, 'j) injected, ('k, 'l) injected) T.t ->
-                     (('a, 'c, 'e, 'g, 'i, 'k) T.t, ('b, 'd, 'f, 'h, 'j, 'l) T.t) injected = "%identity"
-
-  let rec reify r1 r2 r3 r4 r5 r6 (c : helper) x =
-    if c#isVar x then
-    to_var c x (reify r1 r2 r3 r4 r5 r6)
-    else Value (T.fmap (r1 c) (r2 c) (r3 c) (r4 c) (r5 c) (r6 c) x)
-end
-
-end : sig
-  type ('a, 'b) injected
-
-  val to_var: helper -> (('a,'b) injected as 'l) -> (helper -> 'l -> 'b) -> 'b
-module type T1 =
-  sig
-    type 'a t
-    val fmap : ('a -> 'b) -> 'a t -> 'b t
-  end
-
-module type T2 =
-  sig
-    type ('a, 'b) t
-    val fmap : ('a -> 'c) -> ('b -> 'd) -> ('a, 'b) t -> ('c, 'd) t
-  end
-
-module type T3 =
-  sig
-    type ('a, 'b, 'c) t
-    val fmap : ('a -> 'q) -> ('b -> 'r) -> ('c -> 's) -> ('a, 'b, 'c) t -> ('q, 'r, 's) t
-  end
-
-module type T4 =
-  sig
-    type ('a, 'b, 'c, 'd) t
-    val fmap : ('a -> 'q) -> ('b -> 'r) -> ('c -> 's) -> ('d -> 't) -> ('a, 'b, 'c, 'd) t -> ('q, 'r, 's, 't) t
-  end
-
-module type T5 =
-  sig
-    type ('a, 'b, 'c, 'd, 'e) t
-    val fmap : ('a -> 'q) -> ('b -> 'r) -> ('c -> 's) -> ('d -> 't) -> ('e -> 'u) -> ('a, 'b, 'c, 'd, 'e) t -> ('q, 'r, 's, 't, 'u) t
-  end
-
-module type T6 =
-  sig
-    type ('a, 'b, 'c, 'd, 'e, 'f) t
-    val fmap : ('a -> 'q) -> ('b -> 'r) -> ('c -> 's) -> ('d -> 't) -> ('e -> 'u) -> ('f -> 'v) -> ('a, 'b, 'c, 'd, 'e, 'f) t -> ('q, 'r, 's, 't, 'u, 'v) t
-  end
-
-module Fmap (T : T1) :
-  sig
-    val distrib : ('a,'b) injected T.t -> ('a T.t, 'b T.t) injected
-    val reify : (helper -> ('a,'b) injected -> 'b) -> helper -> ('a T.t, 'b T.t logic as 'r) injected -> 'r
-  end
-
-module Fmap2 (T : T2) :
-  sig
-    val distrib : (('a,'c) injected, ('b,'d) injected) T.t -> (('a, 'b) T.t, ('c, 'd) T.t) injected
-    val reify : (helper -> ('a, 'b) injected -> 'b) -> (helper -> ('c, 'd) injected -> 'd) -> helper -> (('a, 'c) T.t, ('b, 'd) T.t logic as 'r) injected -> 'r
-  end
-
-module Fmap3 (T : T3) :
-  sig
-    val distrib : (('a,'b) injected, ('c, 'd) injected, ('e, 'f) injected) T.t -> (('a, 'c, 'e) T.t, ('b, 'd, 'f) T.t) injected
-    val reify : (helper -> ('a, 'b) injected -> 'b) -> (helper -> ('c, 'd) injected -> 'd) -> (helper -> ('e, 'f) injected -> 'f) ->
-                helper -> (('a, 'c, 'e) T.t, ('b, 'd, 'f) T.t logic as 'r) injected -> 'r
-  end
-
-module Fmap4 (T : T4) :
-  sig
-    val distrib : (('a,'b) injected, ('c, 'd) injected, ('e, 'f) injected, ('g, 'h) injected) T.t ->
-                       (('a, 'c, 'e, 'g) T.t, ('b, 'd, 'f, 'h) T.t) injected
-
-    val reify : (helper -> ('a, 'b) injected -> 'b) -> (helper -> ('c, 'd) injected -> 'd) ->
-                (helper -> ('e, 'f) injected -> 'f) -> (helper -> ('g, 'h) injected -> 'h) ->
-                helper -> (('a, 'c, 'e, 'g) T.t, ('b, 'd, 'f, 'h) T.t logic as 'r) injected -> 'r
-  end
-
-module Fmap5 (T : T5) :
-  sig
-    val distrib : (('a,'b) injected, ('c, 'd) injected, ('e, 'f) injected, ('g, 'h) injected, ('i, 'j) injected) T.t ->
-                       (('a, 'c, 'e, 'g, 'i) T.t, ('b, 'd, 'f, 'h, 'j) T.t) injected
-
-    val reify : (helper -> ('a, 'b) injected -> 'b) -> (helper -> ('c, 'd) injected -> 'd) -> (helper -> ('e, 'f) injected -> 'f) ->
-                (helper -> ('g, 'h) injected -> 'h) -> (helper -> ('i, 'j) injected -> 'j) ->
-                helper -> (('a, 'c, 'e, 'g, 'i) T.t, ('b, 'd, 'f, 'h, 'j) T.t logic as 'r) injected -> 'r
-  end
-
-module Fmap6 (T : T6) :
-  sig
-    val distrib : (('a,'b) injected, ('c, 'd) injected, ('e, 'f) injected, ('g, 'h) injected, ('i, 'j) injected, ('k, 'l) injected) T.t ->
-                       (('a, 'c, 'e, 'g, 'i, 'k) T.t, ('b, 'd, 'f, 'h, 'j, 'l) T.t) injected
-
-    val reify : (helper -> ('a, 'b) injected -> 'b) -> (helper -> ('c, 'd) injected -> 'd) -> (helper -> ('e, 'f) injected -> 'f) ->
-                (helper -> ('g, 'h) injected -> 'h) -> (helper -> ('i, 'j) injected -> 'j) -> (helper -> ('k, 'l) injected -> 'l) ->
-                helper -> (('a, 'c, 'e, 'g, 'i, 'k) T.t, ('b, 'd, 'f, 'h, 'j, 'l) T.t logic as 'r) injected -> 'r
-  end
-
-end)
-
-external lift : 'a -> ('a, 'a) injected                      = "%identity"
-external inj  : ('a, 'b) injected -> ('a, 'b logic) injected = "%identity"
-
-let rec reify (c : helper) (n: ('a,'a logic) injected)  =
-  if c#isVar n
-  then to_var c n reify
-  else Value !!!n
-
-exception Not_a_value
-
-let to_logic x = Value x
-
-let from_logic = function
-| Value x    -> x
-| Var (_, _) -> raise Not_a_value
-
-let (!!) x = inj (lift x)
 
 module Env :
   sig
@@ -1556,6 +1344,219 @@ let (?|) gs st =
 
 let conde = (?|)
 
+(* ******************************************************************************* *)
+(* ************************** Reification stuff ********************************** *)
+
+include (struct
+
+type ('a, 'b) injected = 'a
+
+module type T1 =
+  sig
+    type 'a t
+    val fmap : ('a -> 'b) -> 'a t -> 'b t
+  end
+
+module type T2 =
+  sig
+    type ('a, 'b) t
+    val fmap : ('a -> 'c) -> ('b -> 'd) -> ('a, 'b) t -> ('c, 'd) t
+  end
+
+module type T3 =
+  sig
+    type ('a, 'b, 'c) t
+    val fmap : ('a -> 'q) -> ('b -> 'r) -> ('c -> 's) -> ('a, 'b, 'c) t -> ('q, 'r, 's) t
+  end
+
+module type T4 =
+  sig
+    type ('a, 'b, 'c, 'd) t
+    val fmap : ('a -> 'q) -> ('b -> 'r) -> ('c -> 's) -> ('d -> 't) -> ('a, 'b, 'c, 'd) t -> ('q, 'r, 's, 't) t
+  end
+
+module type T5 =
+  sig
+    type ('a, 'b, 'c, 'd, 'e) t
+    val fmap : ('a -> 'q) -> ('b -> 'r) -> ('c -> 's) -> ('d -> 't) -> ('e -> 'u) -> ('a, 'b, 'c, 'd, 'e) t -> ('q, 'r, 's, 't, 'u) t
+  end
+
+module type T6 =
+  sig
+    type ('a, 'b, 'c, 'd, 'e, 'f) t
+    val fmap : ('a -> 'q) -> ('b -> 'r) -> ('c -> 's) -> ('d -> 't) -> ('e -> 'u) -> ('f -> 'v) -> ('a, 'b, 'c, 'd, 'e, 'f) t -> ('q, 'r, 's, 't, 'u, 'v) t
+  end
+
+let rec reify env x =
+  match Env.var env x with
+  | Some v -> Var.reify (reify env) v
+  | None   -> Value (Obj.magic x)
+
+module Fmap (T : T1) =
+  struct
+    external distrib : ('a,'b) injected T.t -> ('a T.t, 'b T.t) injected = "%identity"
+
+    let rec reify r env x =
+      match Env.var env x with
+      | Some v -> Var.reify (reify r env) v
+      | None   -> Value (T.fmap (r env) x)
+  end
+
+module Fmap2 (T : T2) =
+  struct
+    external distrib : (('a,'b) injected, ('c, 'd) injected) T.t -> (('a, 'b) T.t, ('c, 'd) T.t) injected = "%identity"
+
+    let rec reify r1 r2 env x =
+      match Env.var env x with
+      | Some v -> Var.reify (reify r1 r2 env) v
+      | None   -> Value (T.fmap (r1 env) (r2 env) x)
+  end
+
+module Fmap3 (T : T3) =
+  struct
+    external distrib : (('a, 'b) injected, ('c, 'd) injected, ('e, 'f) injected) T.t -> (('a, 'c, 'e) T.t, ('b, 'd, 'f) T.t) injected = "%identity"
+
+    let rec reify r1 r2 r3 env x =
+      match Env.var env x with
+      | Some v -> Var.reify (reify r1 r2 r3 env) v
+      | None   -> Value (T.fmap (r1 env) (r2 env) (r3 env) x)
+end
+
+module Fmap4 (T : T4) = struct
+  external distrib : (('a,'b) injected, ('c, 'd) injected, ('e, 'f) injected, ('g, 'h) injected) T.t ->
+                     (('a, 'c, 'e, 'g) T.t, ('b, 'd, 'f, 'h) T.t) injected = "%identity"
+
+  let rec reify r1 r2 r3 r4 env x =
+   match Env.var env x with
+   | Some v -> Var.reify (reify r1 r2 r3 r4 env) v
+   | None   -> Value (T.fmap (r1 env) (r2 env) (r3 env) (r4 env) x)
+end
+
+module Fmap5 (T : T5) = struct
+  external distrib : (('a,'b) injected, ('c, 'd) injected, ('e, 'f) injected, ('g, 'h) injected, ('i, 'j) injected) T.t ->
+                     (('a, 'c, 'e, 'g, 'i) T.t, ('b, 'd, 'f, 'h, 'j) T.t) injected = "%identity"
+
+  let rec reify r1 r2 r3 r4 r5 env x =
+    match Env.var env x with
+    | Some v -> Var.reify (reify r1 r2 r3 r4 r5 env) v
+    | None   -> Value (T.fmap (r1 env) (r2 env) (r3 env) (r4 env) (r5 env) x)
+end
+
+module Fmap6 (T : T6) = struct
+  external distrib : (('a,'b) injected, ('c, 'd) injected, ('e, 'f) injected, ('g, 'h) injected, ('i, 'j) injected, ('k, 'l) injected) T.t ->
+                     (('a, 'c, 'e, 'g, 'i, 'k) T.t, ('b, 'd, 'f, 'h, 'j, 'l) T.t) injected = "%identity"
+
+  let rec reify r1 r2 r3 r4 r5 r6 env x =
+    match Env.var env x with
+    | Some v -> Var.reify (reify r1 r2 r3 r4 r5 r6 env) v
+    | None   -> Value (T.fmap (r1 env) (r2 env) (r3 env) (r4 env) (r5 env) (r6 env) x)
+end
+
+end : sig
+  type ('a, 'b) injected
+
+  val reify : Env.t -> ('a, 'a logic) injected -> 'a logic
+
+module type T1 =
+  sig
+    type 'a t
+    val fmap : ('a -> 'b) -> 'a t -> 'b t
+  end
+
+module type T2 =
+  sig
+    type ('a, 'b) t
+    val fmap : ('a -> 'c) -> ('b -> 'd) -> ('a, 'b) t -> ('c, 'd) t
+  end
+
+module type T3 =
+  sig
+    type ('a, 'b, 'c) t
+    val fmap : ('a -> 'q) -> ('b -> 'r) -> ('c -> 's) -> ('a, 'b, 'c) t -> ('q, 'r, 's) t
+  end
+
+module type T4 =
+  sig
+    type ('a, 'b, 'c, 'd) t
+    val fmap : ('a -> 'q) -> ('b -> 'r) -> ('c -> 's) -> ('d -> 't) -> ('a, 'b, 'c, 'd) t -> ('q, 'r, 's, 't) t
+  end
+
+module type T5 =
+  sig
+    type ('a, 'b, 'c, 'd, 'e) t
+    val fmap : ('a -> 'q) -> ('b -> 'r) -> ('c -> 's) -> ('d -> 't) -> ('e -> 'u) -> ('a, 'b, 'c, 'd, 'e) t -> ('q, 'r, 's, 't, 'u) t
+  end
+
+module type T6 =
+  sig
+    type ('a, 'b, 'c, 'd, 'e, 'f) t
+    val fmap : ('a -> 'q) -> ('b -> 'r) -> ('c -> 's) -> ('d -> 't) -> ('e -> 'u) -> ('f -> 'v) -> ('a, 'b, 'c, 'd, 'e, 'f) t -> ('q, 'r, 's, 't, 'u, 'v) t
+  end
+
+module Fmap (T : T1) :
+  sig
+    val distrib : ('a,'b) injected T.t -> ('a T.t, 'b T.t) injected
+    val reify : (Env.t -> ('a,'b) injected -> 'b) -> Env.t -> ('a T.t, 'b T.t logic as 'r) injected -> 'r
+  end
+
+module Fmap2 (T : T2) :
+  sig
+    val distrib : (('a,'c) injected, ('b,'d) injected) T.t -> (('a, 'b) T.t, ('c, 'd) T.t) injected
+    val reify : (Env.t -> ('a, 'b) injected -> 'b) -> (Env.t -> ('c, 'd) injected -> 'd) -> Env.t -> (('a, 'c) T.t, ('b, 'd) T.t logic as 'r) injected -> 'r
+  end
+
+module Fmap3 (T : T3) :
+  sig
+    val distrib : (('a,'b) injected, ('c, 'd) injected, ('e, 'f) injected) T.t -> (('a, 'c, 'e) T.t, ('b, 'd, 'f) T.t) injected
+    val reify : (Env.t -> ('a, 'b) injected -> 'b) -> (Env.t -> ('c, 'd) injected -> 'd) -> (Env.t -> ('e, 'f) injected -> 'f) ->
+                Env.t -> (('a, 'c, 'e) T.t, ('b, 'd, 'f) T.t logic as 'r) injected -> 'r
+  end
+
+module Fmap4 (T : T4) :
+  sig
+    val distrib : (('a,'b) injected, ('c, 'd) injected, ('e, 'f) injected, ('g, 'h) injected) T.t ->
+                       (('a, 'c, 'e, 'g) T.t, ('b, 'd, 'f, 'h) T.t) injected
+
+    val reify : (Env.t -> ('a, 'b) injected -> 'b) -> (Env.t -> ('c, 'd) injected -> 'd) ->
+                (Env.t -> ('e, 'f) injected -> 'f) -> (Env.t -> ('g, 'h) injected -> 'h) ->
+                Env.t -> (('a, 'c, 'e, 'g) T.t, ('b, 'd, 'f, 'h) T.t logic as 'r) injected -> 'r
+  end
+
+module Fmap5 (T : T5) :
+  sig
+    val distrib : (('a,'b) injected, ('c, 'd) injected, ('e, 'f) injected, ('g, 'h) injected, ('i, 'j) injected) T.t ->
+                       (('a, 'c, 'e, 'g, 'i) T.t, ('b, 'd, 'f, 'h, 'j) T.t) injected
+
+    val reify : (Env.t -> ('a, 'b) injected -> 'b) -> (Env.t -> ('c, 'd) injected -> 'd) -> (Env.t -> ('e, 'f) injected -> 'f) ->
+                (Env.t -> ('g, 'h) injected -> 'h) -> (Env.t -> ('i, 'j) injected -> 'j) ->
+                Env.t -> (('a, 'c, 'e, 'g, 'i) T.t, ('b, 'd, 'f, 'h, 'j) T.t logic as 'r) injected -> 'r
+  end
+
+module Fmap6 (T : T6) :
+  sig
+    val distrib : (('a,'b) injected, ('c, 'd) injected, ('e, 'f) injected, ('g, 'h) injected, ('i, 'j) injected, ('k, 'l) injected) T.t ->
+                       (('a, 'c, 'e, 'g, 'i, 'k) T.t, ('b, 'd, 'f, 'h, 'j, 'l) T.t) injected
+
+    val reify : (Env.t -> ('a, 'b) injected -> 'b) -> (Env.t -> ('c, 'd) injected -> 'd) -> (Env.t -> ('e, 'f) injected -> 'f) ->
+                (Env.t -> ('g, 'h) injected -> 'h) -> (Env.t -> ('i, 'j) injected -> 'j) -> (Env.t -> ('k, 'l) injected -> 'l) ->
+                Env.t -> (('a, 'c, 'e, 'g, 'i, 'k) T.t, ('b, 'd, 'f, 'h, 'j, 'l) T.t logic as 'r) injected -> 'r
+  end
+
+end)
+
+external lift : 'a -> ('a, 'a) injected                      = "%identity"
+external inj  : ('a, 'b) injected -> ('a, 'b logic) injected = "%identity"
+
+exception Not_a_value
+
+let to_logic x = Value x
+
+let from_logic = function
+| Value x    -> x
+| Var (_, _) -> raise Not_a_value
+
+let (!!) x = inj (lift x)
+
 module Fresh =
   struct
     let succ prev f = call_fresh (fun x -> prev (f x))
@@ -1583,24 +1584,20 @@ module Fresh =
     let pqrst = five
   end
 
-let helper_of_state st =
-  !!!(object method isVar x = Env.is_var (State.env st) x end)
-
 class type ['a,'b] reified = object
   method is_open : bool
   method prj     : 'a
-  method reify   : (helper -> ('a, 'b) injected -> 'b) -> 'b
+  method reify   : (Env.t -> ('a, 'b) injected -> 'b) -> 'b
 end
 
 let make_rr : ('a, 'b) injected -> State.t -> ('a, 'b) reified =
   let open State in fun x ({env; subst; ctrs;} as st) ->
   let ans = !!!(State.reify st (Obj.repr x)) in
   let is_open = Env.has_free_vars env ans in
-  let c: helper = helper_of_state st in
   object (self)
     method is_open            = is_open
     method prj                = if self#is_open then raise Not_a_value else !!!ans
-    method reify reifier      = reifier c ans
+    method reify reifier      = reifier env ans
   end
 
 let prj x = let rr = make_rr x @@ State.empty () in rr#prj
