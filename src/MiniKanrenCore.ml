@@ -871,6 +871,8 @@ module Disequality :
      *)
     val of_dnf : Env.t -> dnf -> t list
 
+    val add : Env.t -> Subst.t -> t -> 'a -> 'a -> t
+
     (* [check ~prefix env subst diseq] - checks that disequality is not violated in refined substitution.
      *   [prefix] is a substitution prefix, i.e. new bindings obtained during unification.
      *   This function may rebuild internal representation of constraints and thus it returns new object.
@@ -882,7 +884,7 @@ module Disequality :
      *   New bindings are interpreted as formula in DNF.
      *   Ex. [(x, 5); (y, 6)] --> (x =/= 5) \/ (y =/= 6)
      *)
-    val extend : prefix:Binding.t list -> Env.t -> t -> t
+    (* val extend : prefix:Binding.t list -> Env.t -> t -> t *)
 
     (* [merge env diseq1 diseq2] - merges two disequality stores *)
     val merge : Env.t -> t -> t -> t
@@ -928,8 +930,9 @@ module Disequality :
         (* Disjunction.t is a set of single disequalities joint by disjunction *)
         type t
 
-        (* [of_list diseqs] build single disjunction from list of disequalities *)
         val of_list : Binding.t list -> t
+
+        val make : Env.t -> Subst.t -> 'a -> 'a -> t
 
         (* [check env subst disj] - checks that disjunction of disequalities is
          *   not violated in (current) substitution.
@@ -955,43 +958,44 @@ module Disequality :
         val reify : Var.t -> t -> 'a
       end =
       struct
-        type t = { sample : Binding.t; unchecked : Binding.t list }
+        type t = Binding.t list
 
-        let choose_sample unchecked =
-          assert (unchecked <> []);
-          { sample = List.hd unchecked; unchecked = List.tl unchecked; }
-
-        (* TODO check that list is valid substitution
-           (i.e. no different disequalities for same variable. Example: (x =/= 1) || (x =/= 2) is invalid) *)
-        let of_list = choose_sample
+        let of_list ds = ds
 
         type status =
           | Fulfiled
           | Violated
           | Refined of Binding.t list * Subst.t
 
-        let refine' env subst =
-        let open Binding in fun { var; term } ->
-          match Subst.unify ~scope:Var.non_local_scope env subst !!!var term with
+        let refine' env subst x y =
+          match Subst.unify ~scope:Var.non_local_scope env subst x y with
           | None                  -> Fulfiled
           | Some ([], _)          -> Violated
           | Some (prefix, subst)  -> Refined (prefix, subst)
 
-        let rec check env subst {sample; unchecked} =
-          match refine' env subst sample with
+        let make env subst x y =
+          match refine' env subst x y with
+          | Refined (delta, _)  -> delta
           | Fulfiled            -> raise Disequality_fulfilled
-          | Refined (delta, _)  -> choose_sample (delta @ unchecked)
+          | Violated            -> raise Disequality_violated
+
+        let rec check env subst =
+          let open Binding in fun { var; term }::unchecked ->
+          match refine' env subst !!!var term with
+          | Fulfiled            -> raise Disequality_fulfilled
+          | Refined (delta, _)  -> delta @ unchecked
           | Violated            ->
             match unchecked with
             | [] -> raise Disequality_violated
-            | ds -> check env subst @@ choose_sample ds
+            | ds -> check env subst ds
 
-        let refine env subst {sample; unchecked} =
-          let result = ListLabels.fold_left (sample::unchecked) ~init:(Some ([], subst))
-                ~f:(fun acc diseq -> match acc with
+        let refine env subst ds =
+          let result = ListLabels.fold_left ds ~init:(Some ([], subst))
+                ~f:(let open Binding in fun acc { var; term } ->
+                    match acc with
                     | None -> None
                     | Some (delta, subst) ->
-                      match refine' env subst diseq with
+                      match refine' env subst !!!var term with
                       | Fulfiled                  -> None
                       | Violated                  -> acc
                       | Refined (delta', subst')  -> Some (delta'@delta, subst')
@@ -1003,15 +1007,16 @@ module Disequality :
             assert (match result with Some ([], _) -> false | _ -> true);
             result
 
-        let reify var {sample; unchecked} =
-          let open Binding in
+        let reify v =
+          let open Binding in fun {var; term}::unchecked ->
           if unchecked <> []
           then invalid_arg "OCanren fatal (Disequality.reify): attempting to reify unnormalized disequalities"
           else
-            assert (Var.equal var sample.var);
-            !!!(sample.term)
+            assert (Var.equal v var);
+            !!!(term)
 
-        let index {sample} = sample.Binding.var.index
+        let index =
+          let open Binding in fun {var; term}::_ -> var.index
       end
 
     module Index :
@@ -1049,19 +1054,22 @@ module Disequality :
 
     let empty = Index.empty
 
-    let extend ~prefix env cstore =
-      if prefix=[]
-      then cstore
-      else
-        let disj = Disjunction.of_list prefix in
+    let add env subst cstore x y =
+      try
+        let disj = Disjunction.make env subst x y in
         Index.add (Disjunction.index disj) disj cstore
+      with Disequality_fulfilled -> cstore
 
     let of_disj env disjs =
-      extend ~prefix:disjs env empty
+      let disj = Disjunction.of_list disjs in
+      Index.add (Disjunction.index disj) disj empty
 
     let of_conj env conjs =
       ListLabels.fold_left conjs ~init:empty
-        ~f:(fun acc pair -> extend ~prefix:[pair] env acc)
+        ~f:(fun acc pair ->
+          let disj = Disjunction.of_list [pair] in
+          Index.add (Disjunction.index disj) disj acc
+        )
 
     let check ~prefix env subst cstore =
       let revisit_conjuncts var_idx conj =
@@ -1117,7 +1125,9 @@ module Disequality :
 
     let of_cnf env cs =
       ListLabels.fold_left cs ~init:empty ~f:(
-        fun acc disj -> extend ~prefix:disj env acc
+        fun acc disj ->
+          let disj = Disjunction.of_list disj in
+          Index.add (Disjunction.index disj) disj acc
       )
 
     let normalize cnf =
@@ -1237,22 +1247,21 @@ module State =
       let result =
         match Subst.unify ~scope env subst x y with
         | None -> None
-        | Some (prefix, s) ->
+        | Some (prefix, subst) ->
           try
-            let ctrs' = Disequality.check ~prefix env s ctrs in
-            Some {st with subst=s; ctrs=ctrs'}
+            let ctrs = Disequality.check ~prefix env subst ctrs in
+            Some {st with subst; ctrs}
           with Disequality_violated -> None
       in
       LOG[perf] (Log.unify#leave);
       result
 
     let disunify x y ({env; subst; ctrs; scope} as st) =
-      match Subst.unify ~scope:Var.non_local_scope env subst x y with
-      | None         -> Some st
-      | Some ([], _) -> None
-      | Some (prefix, _) ->
-          let ctrs' = Disequality.extend ~prefix env ctrs in
-          Some {st with ctrs=ctrs'}
+      try
+        Some {st with ctrs = Disequality.add env subst ctrs x y }
+        (* | Some ctrs -> Some {st with ctrs}
+        | None      -> None *)
+      with Disequality_violated -> None
 
     let merge
       {env=env1; subst=subst1; ctrs=ctrs1; scope=scope1}
