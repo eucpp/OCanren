@@ -836,7 +836,7 @@ module Disequality :
     type cnf
 
     (* Simple representation of disequalities as a formula in Disjunctive Normal Form *)
-    type dnf
+    type dnf = Binding.t list list
 
     val empty  : t
 
@@ -1214,14 +1214,34 @@ module Disequality :
       (mapping, cs')
 end
 
-module State =
-  struct
+module State :
+  sig
     type t =
       { env   : Env.t
       ; subst : Subst.t
       ; ctrs  : Disequality.t
       ; scope : Var.scope
       }
+
+    val empty : unit -> t
+
+    val fresh : t -> 'a
+
+    val new_scope : t -> t
+
+    val unify : 'a -> 'a -> t -> t option
+    val diseq : 'a -> 'a -> t -> t option
+
+    val reify : 'a -> t -> (Env.t * 'a) list
+  end = struct
+    type t =
+      { env   : Env.t
+      ; subst : Subst.t
+      ; ctrs  : Disequality.t
+      ; scope : Var.scope
+      }
+
+    type reified = Env.t * Term.t
 
     let empty () =
       { env   = Env.empty ()
@@ -1235,16 +1255,11 @@ module State =
     let constraints {ctrs} = ctrs
     let scope {scope} = scope
 
-    let new_var {env; scope} =
-      let x = Env.fresh ~scope env in
-      let i = (!!!x : Var.t).Var.index in
-      (x,i)
+    let fresh {env; scope} = Env.fresh ~scope env
 
-    let incr_scope st = {st with scope = Var.new_scope ()}
+    let new_scope st = {st with scope = Var.new_scope ()}
 
     let unify x y ({env; subst; ctrs; scope} as st) =
-      LOG[perf] (Log.unify#enter);
-      let result =
         match Subst.unify ~scope env subst x y with
         | None -> None
         | Some (prefix, subst) ->
@@ -1252,11 +1267,8 @@ module State =
             let ctrs = Disequality.check ~prefix env subst ctrs in
             Some {st with subst; ctrs}
           with Disequality_violated -> None
-      in
-      LOG[perf] (Log.unify#leave);
-      result
 
-    let disunify x y ({env; subst; ctrs; scope} as st) =
+    let diseq x y ({env; subst; ctrs; scope} as st) =
       try
         Some {st with ctrs = Disequality.add env subst ctrs x y }
         (* | Some ctrs -> Some {st with ctrs}
@@ -1280,31 +1292,31 @@ module State =
       let cs = Disequality.project env subst cs @@ Subst.free_vars env subst x in
       {st with ctrs = Disequality.of_cnf env cs}
 
-    let normalize ({env; subst; ctrs; scope} as st) x =
-      let cs = Disequality.to_cnf env subst ctrs in
-      let cs = Disequality.project env subst cs @@ Subst.free_vars env subst x in
-      match Disequality.of_dnf env @@ Disequality.cnf_to_dnf cs with
-      | [] -> [{st with ctrs=Disequality.empty}]
-      | cs -> List.map (fun ctrs -> {env; subst; ctrs; scope}) cs
-
-    let reify {env; subst; ctrs} x =
-      let rec helper forbidden x =
-        Subst.reify env subst x ~f:(fun v ->
+    let reify x {env; subst; ctrs} =
+      let rec helper cs forbidden x =
+        Subst.reify env subst !!!x ~f:(fun v ->
           if List.mem v.Var.index forbidden then v
           else
-            let cs =
-              Disequality.reify env subst ctrs v |>
-              List.filter (fun t ->
-                match Env.var env t with
-                | Some v  -> not (List.mem v.Var.index forbidden)
-                | None    -> true
-              ) |>
-              List.map (fun t -> helper (v.Var.index::forbidden) t)
-            in
-            {v with Var.constraints = cs}
+            {v with Var.constraints =
+              ListLabels.filter cs
+                ~f:(let open Binding in fun {var; term} ->
+                  if Var.equal v var then
+                    match Env.var env term with
+                    | Some u  -> not (List.mem u.Var.index forbidden)
+                    | None    -> true
+                  else false
+                )
+              |> List.map (
+                let open Binding in fun {var; term} ->
+                  helper cs (v.Var.index::forbidden) !!!term
+              )
+            }
         )
       in
-      helper [] x
+      let fv = Subst.free_vars env subst x in
+      Disequality.project env subst (Disequality.to_cnf env subst ctrs) fv
+      |> Disequality.cnf_to_dnf
+      |> List.map (fun cs -> env, Obj.magic (helper cs [] x))
 
   end
 
@@ -1317,13 +1329,13 @@ let failure _  = Stream.nil
 
 let (===) x y st =
   match State.unify x y st with
-  | None   -> Stream.nil
-  | Some s -> Stream.single s
+  | Some st -> success st
+  | None    -> failure st
 
 let (=/=) x y st =
-  match State.disunify x y st with
-  | None   -> Stream.nil
-  | Some s -> Stream.single s
+  match State.diseq x y st with
+  | Some st -> success st
+  | None    -> failure st
 
 let delay g st = Stream.from_fun (fun () -> g () st)
 
@@ -1333,12 +1345,12 @@ let (?&) gs = List.fold_right (&&&) gs success
 
 let disj_base f g st = Stream.mplus (f st) (Stream.from_fun (fun () -> g st))
 
-let disj f g st = let st = State.incr_scope st in disj_base f g |> (fun g -> Stream.from_fun (fun () -> g st))
+let disj f g st = let st = State.new_scope st in disj_base f g |> (fun g -> Stream.from_fun (fun () -> g st))
 
 let (|||) = disj
 
 let (?|) gs st =
-  let st = State.incr_scope st in
+  let st = State.new_scope st in
   let rec inner = function
   | [g]   -> g
   | g::gs -> disj_base g (inner gs)
@@ -1348,9 +1360,8 @@ let (?|) gs st =
 
 let conde = (?|)
 
-let call_fresh f =
-  let open State in fun ({env; scope} as st) ->
-  let x = Env.fresh ~scope env in
+let call_fresh f st =
+  let x = State.fresh st in
   f x st
 
 module Fresh =
@@ -1677,18 +1688,15 @@ class type ['a,'b] reified = object
   method prjc    : (Env.t -> ('a, 'b) injected -> 'a) -> 'a
 end
 
-let make_rr : ('a, 'b) injected -> State.t -> ('a, 'b) reified =
-  let open State in fun x ({env; subst; ctrs;} as st) ->
-  let ans = !!!(State.reify st (Obj.repr x)) in
-  let is_open = Env.has_free_vars env ans in
+let make_rr : Env.t -> ('a, 'b) injected -> ('a, 'b) reified  = fun env x ->
   object (self)
-    method is_open            = is_open
-    method prj                = if self#is_open then raise Not_a_value else !!!ans
-    method reify reifier      = reifier env ans
-    method prjc  onvar        = onvar   env ans
+    method is_open            = Env.has_free_vars env x
+    method prj                = if self#is_open then raise Not_a_value else !!!x
+    method reify reifier      = reifier env x
+    method prjc  onvar        = onvar   env x
   end
 
-let prj x = let rr = make_rr x @@ State.empty () in rr#prj
+let prj x = let rr = make_rr (Env.empty ()) x in rr#prj
 
 module ExtractDeepest =
   struct
@@ -1697,20 +1705,6 @@ module ExtractDeepest =
     let succ prev (a, z) =
       let foo, base = prev z in
       ((a, foo), base)
-  end
-
-module R :
-  sig
-    val apply_reifier : State.t Stream.t -> ('a, 'b) injected -> ('a, 'b) reified Stream.t
-  end =
-  struct
-    let apply_reifier stream x = Stream.map (make_rr x) stream
-  end
-
-module ApplyTuple =
-  struct
-    let one arg r = R.apply_reifier arg r
-    let succ prev = fun arg (r, y) -> (R.apply_reifier arg r, prev arg y)
   end
 
 module Curry =
@@ -1734,25 +1728,16 @@ module LogicAdder :
     let succ prev f = call_fresh (fun logic st -> (logic, prev (f logic) st))
   end
 
-module ApplyAsStream = struct
-  (* There we have a tuple of logic variables and a stream
-   * and we want to make a stream of tuples
-   **)
-
-  (* every numeral is a function from tuple -> state -> reified_tuple *)
-  let one tup state = make_rr tup state
-
-  let succ prev (h,tl) state = (make_rr h state, prev tl state)
-
-  (* Usage: let reified_tuple_stream = wrap ((s s s 1) tuple) stream in ... *)
-  let wrap = Stream.map
+module ReifyTuple = struct
+  let one x env = make_rr env x
+  let succ prev (x, xs) env = (make_rr env x, prev xs env)
 end
 
 let succ n () =
   let adder, app, ext, uncurr = n () in
-  (LogicAdder.succ adder, ApplyAsStream.succ app, ExtractDeepest.succ ext, Uncurry.succ uncurr)
+  (LogicAdder.succ adder, ReifyTuple.succ app, ExtractDeepest.succ ext, Uncurry.succ uncurr)
 
-let one   () = (LogicAdder.(succ zero)), ApplyAsStream.one, ExtractDeepest.ext2, Uncurry.one
+let one   () = (LogicAdder.(succ zero)), ReifyTuple.one, ExtractDeepest.ext2, Uncurry.one
 let two   () = succ one   ()
 let three () = succ two   ()
 let four  () = succ three ()
@@ -1764,26 +1749,11 @@ let qrs   = three
 let qrst  = four
 let qrstu = five
 
-let run n goalish f =
-  Log.clear ();
-  LOG[perf] (Log.run#enter);
-
-  let adder, appN, ext, uncurr = n () in
-  let helper tup =
-    let args, stream = ext tup in
-    (* we normalize stream before reification *)
-    let stream =
-      Stream.bind stream (fun st -> Stream.of_list @@ State.normalize st args)
-    in
-    Stream.map (uncurr f) @@ ApplyAsStream.wrap (appN args) stream
-  in
-  let result = helper (adder goalish @@ State.empty ()) in
-
-  LOG[perf] (
-    Log.run#leave;
-    printf "Run report:\n%s" @@ Log.report ()
-  );
-  result
+let run n g h =
+  let adder, reifier, ext, uncurr = n () in
+  let args, stream = ext @@ adder g @@ State.empty () in
+  Stream.bind stream (fun st -> Stream.of_list @@ State.reify args st)
+  |> Stream.map (fun (env, tup) -> uncurr h @@ reifier tup env)
 
 (** ************************************************************************* *)
 (** Tabling primitives                                                        *)
@@ -1840,8 +1810,8 @@ module Table :
 
         let consume cache args =
           let open State in fun {env; subst; scope} as st ->
-          let st = State.incr_scope st in
-          let scope = State.scope st in
+          let st = State.new_scope st in
+          let scope = st.scope in
           (* [helper iter seen] consumes answer terms from cache one by one
            *   until [iter] (i.e. current pointer into cache list) is not equal to [seen]
            *   (i.e. to the head of seen part of the cache list)
