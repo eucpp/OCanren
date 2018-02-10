@@ -637,7 +637,7 @@ module Subst :
     val merge : Env.t -> t -> t -> t option
 
     (* [is_subsumed env s1 s2] checks that s1 is subsumed by s2 (i.e. s2 is more general than s1) *)
-    val is_subsumed : Env.t -> t -> t -> bool
+    val is_subsumed : Env.t -> t -> 'a -> 'a -> bool
   end =
   struct
     type t = Term.t VarMap.t
@@ -819,13 +819,14 @@ module Subst :
       | None    -> None
     ) subst1 (Some subst2)
 
-    let is_subsumed env subst =
+    (* let is_subsumed env subst =
       VarMap.for_all (fun var term ->
         match unify ~scope:Var.non_local_scope env subst !!!var term with
         | None          -> false
         | Some ([], _)  -> true
         | _             -> false
-      )
+      ) *)  
+
   end
 
 module Int = struct type t = int let compare = (-) end
@@ -1180,8 +1181,9 @@ module Disequality :
         Some cstore
       with Disequality_violated -> None
 
-    let project env subst cs fv = ...
-
+    let project env subst cstore fv =
+      let cs = VarMap.fold (fun _ -> Conjunct.merge conj acc) cstore VarMap.empty in
+      Conjunct.(split @ project env subst cs fv)
 
     let refresh ?(mapping = VarTbl.create 31) ~scope dst_env src_env subst cs =
       let refresh_binding =
