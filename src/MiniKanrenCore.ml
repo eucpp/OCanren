@@ -325,7 +325,7 @@ module Term :
   sig
     type t
 
-    type tag = int
+    type value
 
     val repr : 'a -> t
 
@@ -341,30 +341,29 @@ module Term :
     (* [map ~fvar ~fval x] map over OCaml's value extended with logic variables;
      *   handles primitive types with the help of [fval] and logic variables with the help of [fvar]
      *)
-    val map : fvar:(Var.t -> t) -> fval:(tag -> t -> t) -> t -> t
+    val map : fvar:(Var.t -> t) -> fval:(value -> t) -> t -> t
 
     (* [iter ~fvar ~fval x] iteration over OCaml's value extended with logic variables;
      *   handles primitive types with the help of [fval] and logic variables with the help of [fvar]
      *)
-    val iter : fvar:(Var.t -> unit) -> fval:(tag -> t -> unit) -> t -> unit
+    val iter : fvar:(Var.t -> unit) -> fval:(value -> unit) -> t -> unit
 
     (* [fold ~fvar ~fval ~init x] fold over OCaml's value extended with logic variables;
      *   handles primitive types with the help of [fval] and logic variables with the help of [fvar]
      *)
-    val fold : fvar:('a -> Var.t -> 'a) -> fval:('a -> tag -> t -> 'a) -> init:'a -> t -> 'a
+    val fold : fvar:('a -> Var.t -> 'a) -> fval:('a -> value -> 'a) -> init:'a -> t -> 'a
 
     exception Different_shape
 
     (* [fold ~fvar ~fval ~fvarval ~init x y] folds two OCaml's value extended with logic variables simultaneously;
      *   handles primitive types with the help of [fval] and logic variables with the help of [fvar];
-     *   if it finds logic variable in one term but regular value in another in same place,
-     *   it calls [fvarval];
+     *   if it finds logic variable in one term but regular value in another term in same place, it calls [fk];
      *   if two terms cannot be traversed simultaneously raises exception [Different_shape]
      *)
     val fold2 :
       fvar:('a -> Var.t -> Var.t -> 'a) ->
-      fval:('a -> tag -> t -> t -> 'a)  ->
-      fvarval:('a -> Var.t -> tag -> t -> 'a) ->
+      fval:('a -> value -> value -> 'a)  ->
+      fk:('a -> Var.t -> t -> 'a) ->
       init:'a -> t -> t -> 'a
 
     val equal   : t -> t -> bool
@@ -396,7 +395,10 @@ module Term :
     let is_str = (=) Obj.string_tag
     let is_dbl = (=) Obj.double_tag
 
-    let is_valid_tag t = (is_box t) || (is_int t) || (is_str t) || (is_dbl t)
+    let is_valid_tag t = (is_int t) || (is_str t) || (is_dbl t)
+
+    let is_valid_tag_exn t =
+      if is_valid_tag t then () else failwith (sprintf "OCanren fatal: invalid value tag (%d)" t)
 
     let var x =
       let x = Obj.repr x in
@@ -419,7 +421,8 @@ module Term :
           done;
           y
       else
-        fval tx x
+        is_valid_tag_exn tx;
+        fval x
 
     let rec iter ~fvar ~fval x =
       let tx = Obj.tag x in
@@ -432,7 +435,8 @@ module Term :
             iter ~fvar ~fval (Obj.field x i)
           done;
       else
-        fval tx x
+        is_valid_tag_exn tx;
+        fval x
 
     let rec fold ~fvar ~fval ~init x =
       let tx = Obj.tag x in
@@ -449,25 +453,26 @@ module Term :
           in
           inner 0 init
       else
-        fval init tx x
+        is_valid_tag_exn tx;
+        fval init x
 
     exception Different_shape
 
-    let rec fold2 ~fvar ~fval ~fvarval ~init x y =
+    let rec fold2 ~fvar ~fval ~fk ~init x y =
       let tx, ty = Obj.tag x, Obj.tag y in
       match is_box tx, is_box ty with
       | true, true -> begin
         let sx, sy = Obj.size x, Obj.size y in
         match is_var tx sx x, is_var ty sy y with
         | true, true    -> fvar init (Obj.magic x) (Obj.magic y)
-        | true, false   -> fvarval init (Obj.magic x) ty y
-        | false, true   -> fvarval init (Obj.magic y) tx x
+        | true, false   -> fk init (Obj.magic x) y
+        | false, true   -> fk init (Obj.magic y) x
         | false, false  ->
           if (tx = ty) && (sx = sy) then
             let fx, fy = Obj.field x, Obj.field y in
             let rec inner i acc =
               if i < sx then
-                let acc = fold2 ~fvar ~fval ~fvarval ~init:acc (fx i) (fy i) in
+                let acc = fold2 ~fvar ~fval ~fk ~init:acc (fx i) (fy i) in
                 inner (i+1) acc
               else acc
             in
@@ -475,27 +480,33 @@ module Term :
           else raise Different_shape
         end
       | true, false ->
+        is_valid_tag_exn ty;
         let sx = Obj.size x in
-        if is_var tx sx x then fvarval init (Obj.magic x) ty y else raise Different_shape
+        if is_var tx sx x then fk init (Obj.magic x) y else raise Different_shape
       | false, true ->
+        is_valid_tag_exn tx;
         let sy = Obj.size y in
-        if is_var ty sy y then fvarval init (Obj.magic y) tx x else raise Different_shape
+        if is_var ty sy y then fk init (Obj.magic y) x else raise Different_shape
       | false, false ->
-        if tx = ty then fval init tx x y else raise Different_shape
+        is_valid_tag_exn tx;
+        is_valid_tag_exn ty;
+        if tx = ty then
+          fval init x y
+        else raise Different_shape
 
     let equal = fold2 ~init:true
       ~fvar:(fun acc v u -> acc && (Var.equal v u))
-      ~fval:(fun acc _ x y -> acc && (x = y))
-      ~fvarval:(fun _ _ _ _ -> false)
+      ~fval:(fun acc x y -> acc && (x = y))
+      ~fk:(fun _ _ _ -> false)
 
     let compare = fold2 ~init:0
       ~fvar:(fun acc v u -> if acc <> 0 then acc else (Var.compare v u))
-      ~fval:(fun acc _ x y -> if acc <> 0 then acc else (compare x y))
-      ~fvarval:(fun _ _ _ _ -> -1)
+      ~fval:(fun acc x y -> if acc <> 0 then acc else (compare x y))
+      ~fk:(fun _ _ _ -> -1)
 
     let hash = fold ~init:1
       ~fvar:(fun acc v -> Hashtbl.hash (acc, Var.hash v))
-      ~fval:(fun acc _ x -> Hashtbl.hash (acc, Hashtbl.hash x))
+      ~fval:(fun acc x -> Hashtbl.hash (acc, Hashtbl.hash x))
   end
 
 let (!!!) = Obj.magic
@@ -734,7 +745,6 @@ module Subst :
     exception Unification_failed
 
     let unify ~scope env subst x y =
-      let walk = walk env subst in
       (* The idea is to do the unification and collect the unification prefix during the process *)
       let extend var term (prefix, subst) =
         let subst = extend ~scope env subst var term in
@@ -743,31 +753,25 @@ module Subst :
       let rec helper x y acc =
         let open Term in
         fold2 x y ~init:acc
-          ~fvar:(fun acc x y ->
-            match walk x, walk y with
+          ~fvar:(fun ((_, subst) as acc) x y ->
+            match walk env subst x, walk env subst y with
             | Var x, Var y      ->
               if Var.equal x y then acc else extend x (Term.repr y) acc
             | Var x, Value y    -> extend x y acc
             | Value x, Var y    -> extend y x acc
             | Value x, Value y  -> helper x y acc
           )
-          ~fval:(fun acc t x y ->
-            if Term.is_valid_tag t then
+          ~fval:(fun acc x y ->
               if x = y then acc else raise Unification_failed
-            else
-              failwith (sprintf "OCanren fatal (Subst.unify): invalid value (%d)" t)
           )
-          ~fvarval:(fun acc v t y ->
-            if Term.is_valid_tag t then
-              match walk v with
+          ~fvarval:(fun ((_, subst) as acc) v y ->
+              match walk env subst v with
               | Var v    -> extend v y acc
               | Value x  -> helper x y acc
-            else
-              failwith (sprintf "OCanren fatal (Subst.unify): invalid value (%d)" t)
           )
       in
-      let x, y = Term.(repr x, repr y) in
       try
+        let x, y = Term.(repr x, repr y) in
         Some (helper x y ([], subst))
       with Term.Different_shape | Unification_failed | Occurs_check -> None
 
@@ -825,7 +829,7 @@ module Subst :
         | None          -> false
         | Some ([], _)  -> true
         | _             -> false
-      ) *)  
+      ) *)
 
   end
 
