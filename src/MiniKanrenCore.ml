@@ -938,12 +938,12 @@ module Disequality :
 
         val of_list : Binding.t list -> t
 
-        val to_list : t -> Binding.t list
+        (* val to_list : t -> Binding.t list *)
 
         val make : Env.t -> Subst.t -> 'a -> 'a -> t
 
         (* returns an index of variable involved in some disequality inside disjunction *)
-        val sample : t -> Binding.t
+        val samplevar : t -> Binding.t
 
         (* [recheck env subst disj] - checks that disjunction of disequalities is
          *   not violated in (current) substitution.
@@ -952,6 +952,8 @@ module Disequality :
          *   If arbitary substitutions are passed the result may be invalid.
          *)
         val recheck : Env.t -> Subst.t -> t -> t
+
+        val is_subsumed : Ent.t -> Subst.t -> t -> t -> bool
 
         (* [refine env subst disj] - returns `disequality` prefix along with substitution specialized with that prefix.
          *   It is used in two cases:
@@ -962,60 +964,109 @@ module Disequality :
          *        Then we look into `disequality` prefix for bindings that should not be met.
          *)
         val reify : Env.t -> Subst.t -> t -> (Binding.t list * Subst.t) option
+
+        val equal : t -> t -> bool
+        val compare : t -> t -> int
       end =
       struct
-        type t = Binding.t list
+        type t = Term.t VarMap.t
 
-        let of_list ds = ds
+        let update t =
+          ListLabels.fold_left ~init:t
+            ~f:(let open Binding in fun acc {var; term} ->
+              if VarMap.mem var then
+                (* in this case we have subformula of the form (x =/= t1) \/ (x =/= t2) which is always SAT *)
+                raise Disequality_fulfilled
+              else
+                VarMap.add var term acc
+            )
 
-        let to_list ds = ds
+        let of_list = update VarMap.empty
 
-        let sample d::ds = d
+        (* let to_list ds = ds *)
+
+        let samplevar t = fst @@ VarMap.choose t
 
         type status =
           | Fulfiled
           | Violated
-          | Refined of Binding.t list * Subst.t
+          | Refined of Binding.t list
 
         let refine env subst x y =
           match Subst.unify ~scope:Var.non_local_scope env subst x y with
-          | None                  -> Fulfiled
-          | Some ([], _)          -> Violated
-          | Some (prefix, subst)  -> Refined (prefix, subst)
+          | None              -> Fulfiled
+          | Some ([], _)      -> Violated
+          | Some (prefix, _)  -> Refined prefix
 
         let make env subst x y =
           match refine env subst x y with
-          | Refined (delta, _)  -> delta
-          | Fulfiled            -> raise Disequality_fulfilled
-          | Violated            -> raise Disequality_violated
+          | Refined delta -> of_list delta
+          | Fulfiled      -> raise Disequality_fulfilled
+          | Violated      -> raise Disequality_violated
 
-        let rec recheck env subst =
-          let open Binding in fun { var; term }::unchecked ->
+        let rec recheck env subst t =
+          let var, term = VarMap.min_binding t in
+          let unchecked = VarMap.remove var t in
           match refine env subst !!!var term with
-          | Fulfiled            -> raise Disequality_fulfilled
-          | Refined (delta, _)  -> delta @ unchecked
-          | Violated            ->
-            match unchecked with
-            | [] -> raise Disequality_violated
-            | ds -> recheck env subst ds
+          | Fulfiled       -> raise Disequality_fulfilled
+          | Refined delta  -> update unchecked delta
+          | Violated       ->
+            if VarMap.is_empty unchecked then
+              raise Disequality_violated
+            else
+              recheck env subst unchecked
+
+        let is_relevant env subst t fv =
+          (* left those disjuncts that contains binding only for variables from [fv],
+           * otherwise it's possible to pick binding (x =/= t) from disjunct for
+           * variable [x] that is not in [fv],
+           * assign [t] to [x] and thus fulfill disequality
+           *)
+           VarMap.for_all (fun var term ->
+             (VarSet.mem var fv) ||
+             (match Env.var env term with Some u -> VarSet.mem u fv | None -> false)
+           ) t
+
+        let freevars env subst t =
+          VarMap.fold (fun _ term acc ->
+            VarSet.union acc @@ Subst.freevars env subst term
+          ) t fv
+
+        (* [t'] <= [t] where (<=) is more-general ord *)
+        let is_subsumed env subst t t' =
+          (* we need to check that:
+           * 1) [t'] is prefix of [t] (e.g. (x=/=1 \/ y=/=2) is subsumed by (x=/=1) );
+           * 2) for each binding [var, term'] in [t'] a corresponding [term] in [t] is subsumed by [term']
+           *    (e.g. (x=/=[1]) is subsumed by (x=/=[_.0]) );
+           * example that illustrates use of both conditions: (x=/=[1] \/ y=/=2) is subsumed by (x=/=[_.0])
+           *)
+          S.for_all (fun var term' ->
+            try
+              let term = S.find var t in
+              Subst.is_subsumed env subst term term'
+            with Not_found -> false
+          ) t'
 
         let reify env subst ds =
-          let result = ListLabels.fold_left ds ~init:(Some ([], subst))
+          let result = ListLabels.fold_left ds ~init:(Some [])
                 ~f:(let open Binding in fun acc { var; term } ->
                     match acc with
                     | None -> None
-                    | Some (delta, subst) ->
+                    | Some bs ->
                       match refine env subst !!!var term with
-                      | Fulfiled                  -> None
-                      | Violated                  -> acc
-                      | Refined (delta', subst')  -> Some (delta'@delta, subst')
+                      | Fulfiled       -> None
+                      | Violated       -> acc
+                      | Refined delta  -> Some (delta @ bs)
                 )
             in
             (* We should not get empty substituion delta here,
              * because it would mean that disequality is violated.
              * But we had to detect violations during search via `check`. *)
-            assert (match result with Some ([], _) -> false | _ -> true);
+            assert (match result with Some [] -> false | _ -> true);
             result
+
+        let equal = VarMap.equal Term.equal
+        let compare = VarMap.compare Term.compare
 
       end
 
@@ -1023,9 +1074,9 @@ module Disequality :
       sig
         type t
 
-        val of_list : Disjunct.t list -> t
+        (* val of_list : Disjunct.t list -> t *)
 
-        val to_list : Env.t -> Subst.t -> t -> Binding.t list list
+        (* val to_list : Env.t -> Subst.t -> t -> Binding.t list list *)
 
         val make : Env.t -> Subst.t -> 'a -> 'a -> t
 
@@ -1037,98 +1088,70 @@ module Disequality :
 
         val diff : t -> t -> t
       end = struct
-        type t = (int * Disjunct.t) list
+        module S = Set.Make(Disjunct)
 
-        let next_id = ref 0
+        type t = S.t
 
-        let of_list =
-          List.map (fun disj ->
-            let id = !next_id in
-            next_id := 1 + !next_id;
-            (id, disj)
-          )
+        let diff = S.diff
 
-        let to_list env subst =
-          ListLabels.fold_left ~init:[] ~f:(fun acc (id, disj) ->
-            match Disjunct.reify env subst disj with
-            | Some (disj, _) -> disj::acc
-            | None           -> acc
-          )
+        let merge = S.union
 
         let make env subst x y =
-          let id = !next_id in
-          next_id := 1 + !next_id;
-          [(id, Disjunct.make env subst x y)]
+          S.singleton @@ Disjunct.make env subst x y
 
-        let recheck env subst =
-          ListLabels.fold_left ~init:[]
-            ~f:(fun acc (id, disj) ->
+        let recheck env subst t =
+          S.fold (fun acc disj ->
               try
-                (id, Disjunct.recheck env subst disj)::acc
+                S.add (Disjunct.recheck env subst disj) acc
               with Disequality_fulfilled -> acc
-            )
+          ) t S.empty
 
-        let split =
-          ListLabels.fold_left ~init:VarMap.empty
-            ~f:(fun acc ((_, disj) as pair) ->
-              let open Binding in
-              let {var} = Disjunct.sample disj in
-              let upd = function
-              | Some conj -> Some (pair::conj)
-              | None      -> Some [pair]
-              in
-              VarMap.update var upd acc
-            )
+        let split t =
+          S.fold (fun acc disj ->
+            let var = Disjunct.samplevar disj in
+            let upd = function
+            | Some conj -> Some (S.add disj conj)
+            | None      -> Some (S.singleton disj)
+            in
+            VarMap.update var upd acc
+          ) t VarMap.empty
 
-        let merge = (@)
+        let remove_subsumed cs =
+          S.fold (fun acc disj ->
+            if S.exists (Disjunct.is_subsumed env subst disj) then
+              (* if new disjunct is subsumed by another then we don't add it *)
+              acc
+            else
+              (* otherwise we should remove all disjuncts that are subsumed by newly added *)
+              S.add disj @@ S.filter (fun disj' -> Disjunct.is_subsumed env disj' disj) acc
+          ) cs S.empty
 
-        let diff t' t =
-          let module S = Set.Make(struct type t = int let compare = (-) end) in
-          let s = S.of_list @@ List.map fst t in
-          ListLabels.fold_left t' ~init:[]
-            ~f:(fun acc ((id, _) as pair) ->
-              if S.mem id s then acc else pair::acc
-            )
+        let project env subst t fv =
+          let rec helper fv =
+            let fv', t' = S.fold (fun ((fv', conj) as acc) disj ->
+              (* left those disjuncts that contains binding only for variables from [fv],
+               * and obtain a set of free variables from terms mentioned in those disjuncts
+               *)
+              if Disjunct.is_relevant env subst disj fv then
+                let fv' = VarSet.union fv' @@ Disjunct.freevars env subst disj in
+                fv', S.add disj conj
+            ) t (fv, S.empty)
+            in
+            if VarSet.equal fv fv' then t' else helper fv'
+          in
+          remove_subsumed @@ helper fv
 
       end
 
-    (* module Index :
-      sig
-        type t
-
-        val empty     : t
-        val is_empty  : t -> bool
-        val add       : int -> Disjunction.t -> t -> t
-        val get       : int -> t -> Disjunction.t list
-        val replace   : int -> Disjunction.t list -> t -> t
-        val fold      : ('a -> Disjunction.t -> 'a) -> 'a -> t -> 'a
-        val merge     : t -> t -> t
-      end =
-      struct
-        type t = Disjunction.t list M.t
-
-        let empty           = M.empty
-        let is_empty        = M.is_empty
-        let get k m         = try M.find k m with Not_found -> []
-        let add k v m       = M.add k (v::get k m) m
-        let fold f acc m    = M.fold (fun _ disjs acc -> ListLabels.fold_left ~init:acc ~f disjs) m acc
-        let merge           = M.union (fun _ d1 d2-> Some (d1 @ d2))
-
-        let replace k vs m =
-          let m = M.remove k m in
-          if vs <> [] then M.add k vs m else m
-      end *)
-
     type t = Conjunct.t VarMap.t
-
-    type cnf = Binding.t list list
 
     type dnf = Binding.t list list
 
     let empty = VarMap.empty
 
-    let update conj =
-      VarMap.union (fun _ c c' -> Some (Conjunct.merge c c')) (Conjunct.split conj)
+    let merge = VarMap.union (fun _ c c'-> Some (Conjunct.merge c c'))
+
+    let update conj = merge (Conjunct.split conj)
 
     let add env subst cstore x y =
       try
@@ -1138,14 +1161,14 @@ module Disequality :
         | Disequality_violated  -> None
 
     let recheck env subst cstore bs =
+      let helper var cstore =
+        try
+          let conj = VarMap.find var cstore in
+          let cstore = VarMap.remove var cstore in
+          update (Conjunct.recheck env subst conj) cstore
+        with Not_found -> cstore
+      in
       try
-        let helper var cstore =
-          try
-            let conj = VarMap.find var cstore in
-            let cstore = VarMap.remove var cstore in
-            update (Conjunct.recheck env subst conj) cstore
-          with Not_found -> cstore
-        in
         let cstore = ListLabels.fold_left bs ~init:cstore
           ~f:(let open Binding in fun cstore {var; term} ->
             let cstore = helper var cstore in
@@ -1157,123 +1180,8 @@ module Disequality :
         Some cstore
       with Disequality_violated -> None
 
-      (* let revisit_conjuncts var_idx conj =
-        ListLabels.fold_left conj
-            ~init:([], [])
-            ~f:(fun (stayed, rebound) disj ->
-              try
-                let disj = Disjunction.check env subst disj in
-                if var_idx = (Disjunction.index disj)
-                then (disj::stayed, rebound)
-                else (stayed, disj::rebound)
-              with Disequality_fulfilled -> (stayed, rebound)
-            )
-      in
-      if Index.is_empty cstore then cstore
-      else
-      ListLabels.fold_left prefix ~init:cstore
-        ~f:(fun cstore cnt ->
-          let var_idx = cnt.Binding.var.Var.index in
-          let conj = Index.get var_idx cstore in
-          let stayed1, rebound1 = revisit_conjuncts var_idx conj in
-          let cstore, rebound2 = match Env.var env cnt.Binding.term with
-            | Some v ->
-              let n = v.Var.index in
-              let stayed2, rebound2 = revisit_conjuncts n @@ Index.get n cstore in
-              Index.replace n stayed2 cstore, rebound2
-            | None   -> cstore, []
-          in
-          let cstore = Index.replace var_idx stayed1 cstore in
-          let extend rebound cstore =
-            ListLabels.fold_left rebound ~init:cstore
-            ~f:(fun cstore disj ->
-              Index.add (Disjunction.index disj) disj cstore
-            )
-          in
-          let cstore = extend rebound1 cstore in
-          let cstore = extend rebound2 cstore in
-          cstore
-        ) *)
+    let project env subst cs fv = ...
 
-    let merge env = VarMap.union (fun _ c c'-> Some (Conjunct.merge c c'))
-
-    let to_cnf env subst t =
-      VarMap.fold (fun _ conj acc ->
-        (Conjunct.to_list env subst conj) @ acc
-      ) t []
-
-    let of_cnf env cs =
-      ListLabels.fold_left cs ~init:empty ~f:(
-        fun acc disj ->
-          let disj = Disjunct.of_list disj in
-          let conj = Conjunct.of_list [disj] in
-          update conj acc
-      )
-
-    let normalize cnf =
-      let compare_disj ds1 ds2 =
-        let rec helper ds1 ds2 =
-          match ds1, ds2 with
-          | [], [] -> 0
-          | (d1::ds1), (d2::ds2) ->
-            let res = Binding.compare d1 d2 in
-            if res <> 0 then res else helper ds1 ds2
-        in
-        let l1, l2 = List.length ds1, List.length ds2 in
-        let res = compare l1 l2 in
-        if res <> 0 then res else helper ds1 ds2
-      in
-      let sort_disj = List.sort Binding.compare in
-      List.sort compare_disj @@ List.map sort_disj cnf
-
-    let cnf_to_dnf =
-      ListLabels.fold_left ~init:[[]]
-        ~f:(fun acc disj ->
-          ListLabels.map acc ~f:(fun conj ->
-            let disj = List.filter (fun x -> not @@ List.exists ((=) x) conj) disj in
-            List.map (fun x -> x::conj) disj
-          ) |> List.concat
-        )
-
-    let project env subst cs fv =
-      (* fixpoint-like computation of disequalities relevant to variables in [fv] *)
-      let rec helper fv =
-        let open Binding in
-        (* left those disjuncts that contains binding only for variables from [fv] *)
-        let cs' = ListLabels.fold_left cs ~init:[]
-          ~f:(fun acc disj ->
-            if List.for_all (is_relevant env fv) disj then
-              disj::acc
-            else
-              acc
-          )
-        in
-        (* obtain a set of free variables from terms mentioned in disequalities *)
-        let fv' = ListLabels.fold_left cs' ~init:fv ~f:(fun acc disj ->
-          ListLabels.fold_left disj ~init:acc ~f:(fun acc {var; term} ->
-            VarSet.union acc @@ Subst.free_vars env subst term
-          )
-        ) in
-        if VarSet.equal fv fv'
-        then cs'
-        else helper fv'
-      in
-      let remove_subsumed cs =
-        ListLabels.fold_left cs ~init:[] ~f:(fun acc disj ->
-          let subst = Subst.of_list disj in
-          let is_subsumed = ListLabels.exists acc
-            ~f:(fun _,subst' -> Subst.is_subsumed env subst subst')
-          in
-          if is_subsumed
-          then acc
-          else
-            let acc = ListLabels.filter acc
-              ~f:(fun _,subst' -> not @@ Subst.is_subsumed env subst' subst)
-            in
-            (disj, subst)::acc
-        ) |> List.map fst
-      in
-      remove_subsumed @@ helper fv
 
     let refresh ?(mapping = VarTbl.create 31) ~scope dst_env src_env subst cs =
       let refresh_binding =
