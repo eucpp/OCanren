@@ -857,44 +857,7 @@ module Disequality :
     (* Efficient representation for storing and updating disequalities during search *)
     type t
 
-    (* Simple representation of disequalities as a formula in Conjunctive Normal Form *)
-    type cnf
-
-    (* Simple representation of disequalities as a formula in Disjunctive Normal Form *)
-    type dnf = Binding.t list list
-
     val empty  : t
-
-    (* [of_disj env subst] build a disequality constraint store from a list of bindings
-     *   Ex. [(x, 5); (y, 6)] --> (x =/= 5) \/ (y =/= 6)
-     *)
-    (* val of_disj : Env.t -> Binding.t list -> t *)
-
-    (* [of_conj env subst] build a disequality constraint store from a list of bindings
-     *   Ex. [(x, 5); (y, 6)] --> (x =/= 5) /\ (y =/= 6)
-     *)
-    (* val of_conj : Env.t -> Binding.t list -> t *)
-
-    (* [to_cnf env subst diseq] - returns new disequality in cnf representation *)
-    val to_cnf : Env.t -> Subst.t -> t -> cnf
-
-    (* [of_cnf env diseq] - builds efficient representation of disequalities from cnf representation *)
-    val of_cnf : Env.t -> cnf -> t
-
-    (* [normalize diseq] - normalizes disequalities in cnf representation,
-     *   i.e. sorts them such that equal disequalities can be compared by simple equivalence check.
-     *   Note that additional measures should be performed in order to do alpha-equivalence check of disequalities.
-     *)
-    val normalize : cnf -> cnf
-
-    (* [cnf_to_dnf diseq] - converts disequalities in cnf representation to dnf representation *)
-    val cnf_to_dnf : cnf -> dnf
-
-    (* [of_dnf env diseq] - converts disequalities in dnf representation into a list of
-     *   disequalities in efficient representation.
-     *   Semantically the result list is a list of disequalities bound by disjunction.
-     *)
-    (* val of_dnf : Env.t -> dnf -> t list *)
 
     val add : Env.t -> Subst.t -> t -> 'a -> 'a -> t option
 
@@ -904,32 +867,75 @@ module Disequality :
      *)
     val recheck : Env.t -> Subst.t -> t -> Binding.t list -> t option
 
-    (* [extend ~prefix env diseq] - extends disequality with new bindings.
-     *   New bindings are interpreted as formula in DNF.
-     *   Ex. [(x, 5); (y, 6)] --> (x =/= 5) \/ (y =/= 6)
-     *)
-    (* val extend : prefix:Binding.t list -> Env.t -> t -> t *)
-
     (* [merge env diseq1 diseq2] - merges two disequality stores *)
     val merge : Env.t -> t -> t -> t
 
-    (* val reify : Env.t -> Subst.t -> t -> Var.t -> 'a list *)
-
-    (* [project env subst diseq fv] - projects [diseq] into the set of free-variables [fv],
-     *   i.e. it extracts only those constraints that mention at least one variable from [fv]
+    (* [project env subst fv diseq] - projects [diseq] into the set of free-variables [fv],
+     *   i.e. it extracts only those constraints that are relevant to variables from [fv]
      *)
-    val project : Env.t -> Subst.t -> cnf -> VarSet.t -> cnf
+    val project : Env.t -> Subst.t -> VarSet.t -> t -> t
 
-    (* [refresh ?mapping ~scope dst_env src_env subst diseq fv] - takes a disequality store [diseq]
-     *   and replaces all free variables into fresh variables in destination environment.
-     *   Returns a modified disequality store along with a mapping from variables in [src_env] into [dst_env].
-     *   Takes an optional argumet [mapping], in case it is passed a variable from [src_env]
-     *   first is looked up in [mapping] and only if it is not present there
-     *   fresh variable from [dst_env] is allocated.
-     *)
-    val refresh : ?mapping: Var.t VarTbl.t -> scope:Var.scope -> Env.t -> Env.t -> Subst.t -> cnf -> Var.t VarTbl.t * cnf
+    module Answer :
+      sig
+        type t
+
+        val subsumed : t -> t -> bool
+      end
+
+    val reify : Env.t -> Subst.t -> t -> Answer.t list
   end =
   struct
+    module Answer =
+      struct
+        (* answer is a conjunction of single disequalities, i.g. (x =/= 1 /\ y =/= 2);
+         * in order to efficiently extract disequalities relevant to particular variable we use map
+         *)
+        type t = Term.t list VarMap.t
+
+        let empty = VarMap.empty
+
+        let add t = let open Binding in fun {var; term} ->
+          try
+            let terms = VarMap.find var t in
+            if List.exists (Subst.Answer.subsumed env term) terms then
+              (* we should not add new term if it is subsumed by some other term;
+               * i.g. [x=/=1] should not be added to [x=/=_.0]
+               *)
+              false, t
+            else
+              (* remove all terms that are subsumed by newly added;
+               * i.g. after adding [x=/=_.0] to [x=/=1 /\ x=/=2] answer
+               * should be equal to [x=/=_.0]
+               *)
+              let terms = ListLabels.filter terms
+                ~f:(fun term' ->
+                  not (Subst.Answer.subsumed env term' term)
+                )
+              in
+              true, VarMap.add var (term::terms)
+          with Not_found ->
+            true, VarMap.add var [term] t
+
+        let subsumed t t' =
+          (* we should check that for each binding from [t'] there is
+           * a binding in [t] that subsumes it;
+           * Examples:
+           *    (x =/= _.0) <= (x =/= 1 /\ x =/= 2), but
+           *    (x =/= _.0) and (x =/= 1 /\ y =/= 2) are not ordered
+           *)
+          VarMap.forall (fun var terms' ->
+            try
+              let terms = VarMap.find var t in
+              ListLabels.for_all terms' ~f:(fun term' ->
+                ListLabels.exists terms ~f:(fun term ->
+                  Subst.Answer.subsumed env term term'
+                )
+              )
+            with Not_found -> false
+          ) t'
+
+      end
+
     (* Disequality constraints are represented as formula in CNF
      * where each atom is single disequality
      * (i.g. ({x =/= t} \/ {y =/= u}) /\ ({y =/= v} \/ {z =/= w}))
@@ -1079,7 +1085,7 @@ module Disequality :
 
         val project : Env.t -> Subst.t -> VarSet.t -> t -> t
 
-        val merge_disjoint : t -> t -> t
+        val merge_disjoint : Env.t -> Subst.t -> t -> t -> t
 
         (* [diff env subst t' t] computes diff of two conjuncts, that is [t' \ t].
          *   Returns a pair where first element is conjunct
@@ -1088,6 +1094,8 @@ module Disequality :
          *   that absent in [t].
          *)
         val diff : Env.t -> Subst.t -> t -> t -> t * t
+
+        val reify : Env.t -> Subst.t -> t -> 'a -> Answer.t list
       end = struct
         let next_id = ref 0
 
@@ -1096,6 +1104,8 @@ module Disequality :
         type t = Disjunct.t M.t
 
         let empty = M.empty
+
+        let is_empty = M.is_empty
 
         let make env subst x y =
           let id = !next_ind in
@@ -1119,6 +1129,11 @@ module Disequality :
               with Disequality_fulfilled -> acc
           ) t M.empty
 
+        let merge_disjoint env subst subst =
+          M.union (fun _ _ _ ->
+            invalid_arg "OCanren fatal (Conjunct.merge_disjoint): conjuncts intersect"
+          )
+
         let diff env subst t' t =
           M.fold (fun id disj' (refined, added) ->
             try
@@ -1129,11 +1144,6 @@ module Disequality :
             with Not_found ->
               (refined, M.add id disj' added)
           ) t' (M.empty, M.empty)
-
-        let merge_disjoint env subst =
-          M.union (fun _ _ _ ->
-            invalid_arg "OCanren fatal (Conjunct.merge_disjoint): conjuncts intersect"
-          )
 
         let remove_subsumed cs =
           M.fold (fun id disj acc ->
@@ -1163,6 +1173,25 @@ module Disequality :
           in
           remove_subsumed @@ helper fv
 
+        let reify env subst t x =
+          let fv = Subst.freevars env subst x in
+          let t = project env subst fv t in
+          M.fold (fun _ disj acc ->
+            let bs = Disjunct.reify env subst disj in
+            ListLabels.map acc (fun answ ->
+              ListLabels.fold_left bs ~init:(false, []) ~f:(fun (flag, answs) b ->
+                let changed, answ = Answer.add env answ b in
+                (* if [answ] was not modified and we haven't add unchanged [answ] already ([flag] is [false])
+                 * then we add unchanged [answ]
+                 *)
+                if (not changed) && (not flag) then
+                  (true, answs)
+                else
+                  (flag, answ::answs)
+              ) |> snd
+            ) |> List.concat
+          ) t ~init:[Answer.empty]
+
       end
 
     type t = Conjunct.t VarMap.t
@@ -1171,13 +1200,16 @@ module Disequality :
 
     let empty = VarMap.empty
 
-    let merge = VarMap.union (fun _ c c'-> Some (Conjunct.merge c c'))
+    let merge_disjoint env subst = VarMap.union (fun _ c1 c2->
+      let c = Conjunct.merge_disjoint env subst c c' in
+      if Conjunct.is_empty c then None else Some c
+    )
 
-    let update conj = merge (Conjunct.split conj)
+    let update env subst conj = merge_disjoint env subst (Conjunct.split conj)
 
     let add env subst cstore x y =
       try
-        Some (update (Conjunct.make env subst x y) cstore)
+        Some (update env subst (Conjunct.make env subst x y) cstore)
       with
         | Disequality_fulfilled -> Some cstore
         | Disequality_violated  -> None
@@ -1202,25 +1234,17 @@ module Disequality :
         Some cstore
       with Disequality_violated -> None
 
-    let project env subst cstore fv =
-      let cs = VarMap.fold (fun _ -> Conjunct.merge conj acc) cstore Conjunct.empty in
-      Conjunct.(split @ project env subst fv cs)
+    (* merges all conjuncts (linked to different variables) into one *)
+    let combine =
+      VarMap.fold (fun _ -> Conjunct.merge conj acc) cstore Conjunct.empty
 
-    let refresh ?(mapping = VarTbl.create 31) ~scope dst_env src_env subst cs =
-      let refresh_binding =
-        let open Binding in fun {var; term} ->
-        let new_var =
-          try
-            VarTbl.find mapping var
-          with Not_found ->
-            let new_var = Env.fresh ~scope dst_env in
-            VarTbl.add mapping var new_var;
-            new_var
-        in
-        {var = new_var; term = snd @@ Subst.refresh ~mapping ~scope dst_env src_env subst term}
-      in
-      let cs' = List.map (List.map refresh_binding) cs in
-      (mapping, cs')
+    let project env subst cstore fv =
+      Conjunct.(split @@ project env subst fv @@ combine cstore)
+
+    let reify env subst cstore t =
+      let fv = Subst.freevars env subst t in
+      Conjunct.(reify @@ project env subst fv @@ combine cstore)
+
 end
 
 module State :
