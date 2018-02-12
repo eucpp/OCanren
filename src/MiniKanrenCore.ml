@@ -994,8 +994,6 @@ module Disequality :
 
         let of_list = update VarMap.empty
 
-        (* let to_list ds = ds *)
-
         let samplevar t = fst @@ VarMap.choose t
 
         type status =
@@ -1049,7 +1047,7 @@ module Disequality :
           (* left those disjuncts that contains binding only for variables from [fv],
            * otherwise it's possible to pick binding (x =/= t) from disjunct for
            * variable [x] that is not in [fv],
-           * assign [t] to [x] and thus fulfill disequality
+           * assign [t'] ([t =/= t']) to [x] and thus fulfill the disequality
            *)
            VarMap.for_all (fun var term ->
              (VarSet.mem var fv) ||
@@ -1071,64 +1069,95 @@ module Disequality :
       sig
         type t
 
-        val make : Env.t -> Subst.t -> 'a -> 'a -> t
+        val empty : t
 
-        val recheck : Env.t -> Subst.t -> t -> t
+        val make : Env.t -> Subst.t -> 'a -> 'a -> t
 
         val split : t -> t VarMap.t
 
-        val merge : t -> t -> t
+        val recheck : Env.t -> Subst.t -> t -> t
 
-        val diff : t -> t -> t
+        val project : Env.t -> Subst.t -> VarSet.t -> t -> t
+
+        val merge_disjoint : t -> t -> t
+
+        (* [diff env subst t' t] computes diff of two conjuncts, that is [t' \ t].
+         *   Returns a pair where first element is conjunct
+         *   of constraints that were changed (i.e. refined) in [t'],
+         *   and the second element is conjunct of entirely new constraints in [t'],
+         *   that absent in [t].
+         *)
+        val diff : Env.t -> Subst.t -> t -> t -> t * t
       end = struct
-        module S = Set.Make(Disjunct)
+        let next_id = ref 0
 
-        type t = S.t
+        module M = Map.Make(struct type t = int let compare = (-) end)
 
-        let diff = S.diff
+        type t = Disjunct.t M.t
 
-        let merge = S.union
+        let empty = M.empty
 
         let make env subst x y =
-          S.singleton @@ Disjunct.make env subst x y
-
-        let recheck env subst t =
-          S.fold (fun acc disj ->
-              try
-                S.add (Disjunct.recheck env subst disj) acc
-              with Disequality_fulfilled -> acc
-          ) t S.empty
+          let id = !next_ind in
+          next_id := !next_id + 1 in
+          M.singleton id @@ Disjunct.make env subst x y
 
         let split t =
-          S.fold (fun acc disj ->
+          M.fold (fun id disj acc ->
             let var = Disjunct.samplevar disj in
             let upd = function
-            | Some conj -> Some (S.add disj conj)
-            | None      -> Some (S.singleton disj)
+            | Some conj -> Some (M.add id disj conj)
+            | None      -> Some (M.singleton id disj)
             in
             VarMap.update var upd acc
           ) t VarMap.empty
 
+        let recheck env subst t =
+          M.fold (fun id disj acc ->
+              try
+                M.add id (Disjunct.recheck env subst disj) acc
+              with Disequality_fulfilled -> acc
+          ) t M.empty
+
+        let diff env subst t' t =
+          M.fold (fun id disj' (refined, added) ->
+            try
+              let disj = M.find id t in
+              (* refined constraint should be more specialized (i.e. subsumed by earlier constraint) *)
+              assert (Disjunct.subsumed env subst disj' disj);
+              (M.add id disj' refined, added)
+            with Not_found ->
+              (refined, M.add id disj' added)
+          ) t' (M.empty, M.empty)
+
+        let merge_disjoint env subst =
+          M.union (fun _ _ _ ->
+            invalid_arg "OCanren fatal (Conjunct.merge_disjoint): conjuncts intersect"
+          )
+
         let remove_subsumed cs =
-          S.fold (fun acc disj ->
-            if S.exists (Disjunct.is_subsumed env subst disj) then
-              (* if new disjunct is subsumed by another then we don't add it *)
+          M.fold (fun id disj acc ->
+            if M.exists (fun _ disj' -> Disjunct.subsumed env subst disj' disj) then
+              (* if new disjunct subsumes some another then we don't add it;
+               * that's because we have conjunction of disjuncts and we can keep only
+               * the most specialized disjuncts
+               *)
               acc
             else
-              (* otherwise we should remove all disjuncts that are subsumed by newly added *)
-              S.add disj @@ S.filter (fun disj' -> Disjunct.is_subsumed env disj' disj) acc
-          ) cs S.empty
+              (* otherwise we should remove all disjuncts that subsume the newly added disjunct *)
+              M.add id disj @@ S.filter (fun disj' -> not (Disjunct.subsumed env disj disj')) acc
+          ) cs M.empty
 
-        let project env subst t fv =
+        let project env subst fv t =
           let rec helper fv =
-            let fv', t' = S.fold (fun ((fv', conj) as acc) disj ->
-              (* left those disjuncts that contains binding only for variables from [fv],
+            let fv', t' = M.fold (fun id disj ((fv', conj) as acc) ->
+              (* left those disjuncts that contain bindings only for variables from [fv],
                * and obtain a set of free variables from terms mentioned in those disjuncts
                *)
-              if Disjunct.is_relevant env subst disj fv then
+              if Disjunct.is_relevant env subst fv disj then
                 let fv' = VarSet.union fv' @@ Disjunct.freevars env subst disj in
-                fv', S.add disj conj
-            ) t (fv, S.empty)
+                fv', M.add id disj conj
+            ) t (fv, M.empty)
             in
             if VarSet.equal fv fv' then t' else helper fv'
           in
@@ -1174,8 +1203,8 @@ module Disequality :
       with Disequality_violated -> None
 
     let project env subst cstore fv =
-      let cs = VarMap.fold (fun _ -> Conjunct.merge conj acc) cstore VarMap.empty in
-      Conjunct.(split @ project env subst cs fv)
+      let cs = VarMap.fold (fun _ -> Conjunct.merge conj acc) cstore Conjunct.empty in
+      Conjunct.(split @ project env subst fv cs)
 
     let refresh ?(mapping = VarTbl.create 31) ~scope dst_env src_env subst cs =
       let refresh_binding =
