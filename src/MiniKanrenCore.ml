@@ -332,12 +332,6 @@ module Term :
     (* [var x] if [x] is logic variable returns it, otherwise returns [None] *)
     val var : 'a -> Var.t option
 
-    (* [is_valid_tag t] checks that tag is correct;
-     *   (some OCaml's tags such as [closure_tag] are forbidden because
-     *    the unification of such values is not supported currently)
-     *)
-    val is_valid_tag : tag -> bool
-
     (* [map ~fvar ~fval x] map over OCaml's value extended with logic variables;
      *   handles primitive types with the help of [fval] and logic variables with the help of [fvar]
      *)
@@ -373,7 +367,7 @@ module Term :
     val hash    : t -> int
   end = struct
     type t = Obj.t
-    type tag = int
+    type value = Obj.t
 
     let repr = Obj.repr
 
@@ -422,9 +416,10 @@ module Term :
             Obj.set_field y i @@ map ~fvar ~fval (Obj.field x i)
           done;
           y
-      else
+      else begin
         is_valid_tag_exn tx;
         fval x
+      end
 
     let rec iter ~fvar ~fval x =
       let tx = Obj.tag x in
@@ -436,9 +431,10 @@ module Term :
           for i = 0 to sx - 1 do
             iter ~fvar ~fval (Obj.field x i)
           done;
-      else
+      else begin
         is_valid_tag_exn tx;
         fval x
+      end
 
     let rec fold ~fvar ~fval ~init x =
       let tx = Obj.tag x in
@@ -454,9 +450,10 @@ module Term :
             else acc
           in
           inner 0 init
-      else
+      else begin
         is_valid_tag_exn tx;
         fval init x
+      end
 
     exception Different_shape
 
@@ -501,12 +498,12 @@ module Term :
     let equal = fold2 ~init:true
       ~fvar:(fun acc v u -> acc && (Var.equal v u))
       ~fval:(fun acc x y -> acc && (x = y))
-      ~fk:(fun _ _ _ -> false)
+      ~fk:(fun _ _ _ _ -> false)
 
     let compare = fold2 ~init:0
       ~fvar:(fun acc v u -> if acc <> 0 then acc else (Var.compare v u))
       ~fval:(fun acc x y -> if acc <> 0 then acc else (compare x y))
-      ~fk:(fun _ _ _ -> -1)
+      ~fk:(fun _ _ _ _ -> -1)
 
     let hash = fold ~init:1
       ~fvar:(fun acc v -> Hashtbl.hash (acc, Var.hash v))
@@ -526,9 +523,8 @@ module Env :
     val check_exn     : t -> Var.t -> unit
     val is_var        : t -> 'a -> bool
     val var           : t -> 'a -> Var.t option
-    val free_vars     : t -> 'a -> VarSet.t
-    val has_free_vars : t -> 'a -> bool
-    val merge         : t -> t -> t
+    val freevars      : t -> 'a -> VarSet.t
+    val is_open       : t -> 'a -> bool
   end =
   struct
     type t = {anchor : Var.env; mutable next : int}
@@ -559,20 +555,20 @@ module Env :
 
     let is_var env x = (var env x) <> None
 
-    let free_vars env x =
+    let freevars env x =
       Term.fold (Term.repr x) ~init:VarSet.empty
-        ~fvar:(fun acc v   -> VarSet.add v acc)
-        ~fval:(fun acc t x ->
-          if Term.is_valid_tag t then acc
-          else failwith (sprintf "OCanren fatal (Env.free_vars): invalid value (%d)" t)
-        )
+        ~fvar:(fun acc v -> VarSet.add v acc)
+        ~fval:(fun acc _ -> acc)
 
-    let has_free_vars env x =
-      not (VarSet.is_empty @@ free_vars env x)
+    exception Open_Term
 
-    let merge {anchor=anchor1; next=next1} {anchor=anchor2; next=next2} =
-      assert (anchor1 == anchor2);
-      {anchor=anchor1; next = max next1 next2}
+    let is_open env x =
+      try
+        Term.iter (Term.repr x)
+          ~fvar:(fun _ -> raise Open_Term)
+          ~fval:(fun _ -> ());
+        false
+      with Open_Term -> true
   end
 
 module Binding :
@@ -615,14 +611,14 @@ module Subst :
     val empty : t
 
     val of_list : Binding.t list -> t
-    val of_map  : Term.t VarMap.t
+    val of_map  : Term.t VarMap.t -> t
 
     val split : t -> Binding.t list
 
-    (* [project env subst x] - performs a deepwalk of term [x],
+    (* [substitute env subst x] - performs a deepwalk of term [x],
      *   replacing every variable to relevant binding in [subst];
      *   i.e. it obtains a value of term [x] in [subst] *)
-    val project : Env.t -> t -> 'a -> 'a
+    val substitute : Env.t -> t -> 'a -> 'a
 
     (* [refresh ?mapping ~scope dst_env src_env subst x] - takes a term [x],
      *   projects [subst] into it
@@ -633,13 +629,13 @@ module Subst :
      *   first is looked up in [mapping] and only if it is not present there
      *   fresh variable from [dst_env] is allocated.
      *)
-    val refresh : ?mapping : Var.t VarTbl.t -> scope:Var.scope -> Env.t -> Env.t -> t -> 'a -> Var.t VarTbl.t * 'a
+    (* val refresh : ?mapping : Var.t VarTbl.t -> scope:Var.scope -> Env.t -> Env.t -> t -> 'a -> Var.t VarTbl.t * 'a *)
 
     (* [is_bound x subst] - checks whether [x] is bound by [subst] *)
     val is_bound : Var.t -> t -> bool
 
-    (* [free_vars env subst x] - returns all free-variables of term [x] *)
-    val free_vars : Env.t -> t -> 'a -> VarSet.t
+    (* [freevars env subst x] - returns all free-variables of term [x] *)
+    val freevars : Env.t -> t -> 'a -> VarSet.t
 
     (* [unify ~asymm ~scope env subst x y] performs unification of two terms [x] and [y] in [subst].
      *   Unification is a process of finding substituion [s] s.t. [s(x) = s(y)].
@@ -654,7 +650,7 @@ module Subst :
      *)
     val unify : ?subsume:bool -> scope:Var.scope -> Env.t -> t -> 'a -> 'a -> (Binding.t list * t) option
 
-    val reify : f:(Var.t -> Var.t) -> Env.t -> t -> 'a -> 'a
+    val merge_disjoint : Env.t -> t -> t -> t
 
     (* [merge env s1 s2] merges two substituions *)
     val merge : Env.t -> t -> t -> t option
@@ -662,7 +658,16 @@ module Subst :
     (* [subsumed env s1 s2] checks that s1 is subsumed by s2 (i.e. s2 is more general than s1).
      *   Subsumption relation forms a partial order on the set of substitutions.
      *)
-    val subsumed : Env.t -> t -> 'a -> 'a -> bool
+    val subsumed : Env.t -> t -> t -> bool
+
+    module Answer :
+      sig
+        type t = Term.t
+
+        val subsumed : Env.t -> t -> t -> bool
+      end
+
+    val reify : Env.t -> t -> 'a -> Answer.t
   end =
   struct
     type t = Term.t VarMap.t
@@ -734,13 +739,8 @@ module Subst :
 
     let rec occurs env subst var term =
       iter env subst term
-        (* ~fvar:(fun acc v -> acc || Var.equal v var) *)
         ~fvar:(fun v -> if Var.equal v var then raise Occurs_check)
-        ~fval:(fun t x ->
-          if Term.is_valid_tag t then ()
-          else
-            failwith (sprintf "OCanren fatal (Subst.occurs): invalid value (%d)" t)
-        )
+        ~fval:(fun x -> ())
 
     let extend ~scope env subst var term  =
       (* if occurs env subst var term then raise Occurs_check *)
@@ -763,7 +763,7 @@ module Subst :
 
     exception Unification_failed
 
-    let unify ?(subsume:false) ~scope env subst x y =
+    let unify ?(subsume=false) ~scope env subst x y =
       (* The idea is to do the unification and collect the unification prefix during the process *)
       let extend var term (prefix, subst) =
         let subst = extend ~scope env subst var term in
@@ -796,15 +796,7 @@ module Subst :
         Some (helper x y ([], subst))
       with Term.Different_shape | Unification_failed | Occurs_check -> None
 
-    let reify ~f env subst x = Obj.magic @@
-      map env subst (Term.repr x)
-        ~fvar:(fun v -> Term.repr (f v))
-        ~fval:(fun t x ->
-          if Term.is_valid_tag t then x
-          else failwith (sprintf "OCanren fatal (Subst.reify): invalid value (%d)" t)
-        )
-
-    let refresh ?(mapping = VarTbl.create 31) ~scope dst_env src_env subst x =
+    (* let refresh ?(mapping = VarTbl.create 31) ~scope dst_env src_env subst x =
       let rec helper x = Obj.magic @@
         map src_env subst (Term.repr x)
           ~fvar:(fun v ->
@@ -820,10 +812,15 @@ module Subst :
             else failwith (sprintf "OCanren fatal (Subst.refresh): invalid value (%d)" t)
           )
       in
-      mapping, helper x
+      mapping, helper x *)
 
-    let free_vars env subst x =
-      Env.free_vars env @@ project env subst x
+    let substitute env subst x = Obj.magic @@
+      map env subst (Term.repr x)
+        ~fvar:(fun v -> Term.repr v)
+        ~fval:(fun x -> Term.repr x)
+
+    let freevars env subst x =
+      Env.freevars env @@ substitute env subst x
 
     let is_bound = VarMap.mem
 
@@ -836,6 +833,11 @@ module Subst :
       | None    -> None
     ) subst1 (Some subst2)
 
+    let merge_disjoint env =
+      VarMap.union (fun _ _ ->
+        invalid_arg "OCanren fatal (Subst.merge_disjoint): substitutions intersect"
+      )
+
     let subsumed env subst =
       VarMap.for_all (fun var term ->
         match unify ~scope:Var.non_local_scope env subst !!!var term with
@@ -844,10 +846,22 @@ module Subst :
         | _             -> false
       )
 
-  end
+    module Answer =
+      struct
+        type t = Term.t
 
-module Int = struct type t = int let compare = (-) end
-module M = Map.Make(Int)
+        let subsumed env x y =
+          match unify ~subsume:true ~scope:Var.non_local_scope env empty y x with
+          | Some _ -> true
+          | None   -> false
+      end
+
+    let reify env subst x =
+      map env subst (Term.repr x)
+        ~fvar:(fun v -> Term.repr v)
+        ~fval:(fun x -> Term.repr x)
+
+  end
 
 exception Disequality_violated
 exception Disequality_fulfilled
@@ -867,22 +881,19 @@ module Disequality :
      *)
     val recheck : Env.t -> Subst.t -> t -> Binding.t list -> t option
 
-    (* [merge env diseq1 diseq2] - merges two disequality stores *)
-    val merge : Env.t -> t -> t -> t
-
     (* [project env subst fv diseq] - projects [diseq] into the set of free-variables [fv],
      *   i.e. it extracts only those constraints that are relevant to variables from [fv]
      *)
-    val project : Env.t -> Subst.t -> VarSet.t -> t -> t
+    val project : Env.t -> Subst.t -> t -> VarSet.t -> t
 
     module Answer :
       sig
         type t
 
-        val subsumed : t -> t -> bool
+        val subsumed : Env.t -> t -> t -> bool
       end
 
-    val reify : Env.t -> Subst.t -> t -> Answer.t list
+    val reify : Env.t -> Subst.t -> t -> 'a -> Answer.t list
   end =
   struct
     module Answer =
@@ -894,7 +905,7 @@ module Disequality :
 
         let empty = VarMap.empty
 
-        let add t = let open Binding in fun {var; term} ->
+        let add env t = let open Binding in fun {var; term} ->
           try
             let terms = VarMap.find var t in
             if List.exists (Subst.Answer.subsumed env term) terms then
@@ -912,18 +923,18 @@ module Disequality :
                   not (Subst.Answer.subsumed env term' term)
                 )
               in
-              true, VarMap.add var (term::terms)
+              true, VarMap.add var (term::terms) t
           with Not_found ->
             true, VarMap.add var [term] t
 
-        let subsumed t t' =
+        let subsumed env t t' =
           (* we should check that for each binding from [t'] there is
            * a binding in [t] that subsumes it;
            * Examples:
            *    (x =/= _.0) <= (x =/= 1 /\ x =/= 2), but
            *    (x =/= _.0) and (x =/= 1 /\ y =/= 2) are not ordered
            *)
-          VarMap.forall (fun var terms' ->
+          VarMap.for_all (fun var terms' ->
             try
               let terms = VarMap.find var t in
               ListLabels.for_all terms' ~f:(fun term' ->
@@ -963,7 +974,7 @@ module Disequality :
         val make : Env.t -> Subst.t -> 'a -> 'a -> t
 
         (* returns an index of variable involved in some disequality inside disjunction *)
-        val samplevar : t -> Binding.t
+        val samplevar : t -> Var.t
 
         (* [recheck env subst disj] - checks that disjunction of disequalities is
          *   not violated in (current) substitution.
@@ -973,7 +984,11 @@ module Disequality :
          *)
         val recheck : Env.t -> Subst.t -> t -> t
 
-        val subsumed : Ent.t -> Subst.t -> t -> t -> bool
+        val is_relevant : Env.t -> Subst.t -> t -> VarSet.t -> bool
+
+        val freevars : Env.t -> Subst.t -> t -> VarSet.t
+
+        val subsumed : Env.t -> Subst.t -> t -> t -> bool
 
         (* [refine env subst disj] - returns `disequality` prefix along with substitution specialized with that prefix.
          *   It is used in two cases:
@@ -983,7 +998,7 @@ module Disequality :
          *   2) When we want to reify an answer we again try to unify current substitution with disequalities.
          *        Then we look into `disequality` prefix for bindings that should not be met.
          *)
-        val reify : Env.t -> Subst.t -> t -> (Binding.t list * Subst.t) option
+        val reify : Env.t -> Subst.t -> t -> Binding.t list option
       end =
       struct
         type t = Term.t VarMap.t
@@ -991,7 +1006,7 @@ module Disequality :
         let update t =
           ListLabels.fold_left ~init:t
             ~f:(let open Binding in fun acc {var; term} ->
-              if VarMap.mem var then
+              if VarMap.mem var acc then
                 (* in this case we have subformula of the form (x =/= t1) \/ (x =/= t2) which is always SAT *)
                 raise Disequality_fulfilled
               else
@@ -1032,22 +1047,22 @@ module Disequality :
               recheck env subst unchecked
 
         let reify env subst ds =
-          let result = ListLabels.fold_left ds ~init:(Some [])
-                ~f:(let open Binding in fun acc { var; term } ->
-                    match acc with
-                    | None -> None
-                    | Some bs ->
-                      match refine env subst !!!var term with
-                      | Fulfiled       -> None
-                      | Violated       -> acc
-                      | Refined delta  -> Some (delta @ bs)
-                )
-            in
-            (* We should not get empty substituion delta here,
-             * because it would mean that disequality is violated.
-             * But we had to detect violations during search via `check`. *)
-            assert (match result with Some [] -> false | _ -> true);
-            result
+          let result = VarMap.fold (fun var term acc ->
+            match acc with
+            | None    -> None
+            | Some bs ->
+              match refine env subst !!!var term with
+              | Fulfiled       -> None
+              | Violated       -> acc
+              | Refined delta  -> Some (delta @ bs)
+          ) ds (Some [])
+          in
+          (* We should not get empty substituion delta here,
+           * because it would mean that disequality is violated.
+           * But we had to detect violations during search via `check`.
+           *)
+          assert (match result with Some [] -> false | _ -> true);
+          result
 
         let is_relevant env subst t fv =
           (* left those disjuncts that contains binding only for variables from [fv],
@@ -1066,7 +1081,7 @@ module Disequality :
           ) t VarSet.empty
 
         let subsumed env subst t t' =
-          let to_subst x = Subst.merge_disjoint subst @@ Subst.of_map x in
+          let to_subst x = Subst.merge_disjoint env subst @@ Subst.of_map x in
           Subst.subsumed env (to_subst t') (to_subst t)
 
       end
@@ -1077,13 +1092,15 @@ module Disequality :
 
         val empty : t
 
+        val is_empty : t -> bool
+
         val make : Env.t -> Subst.t -> 'a -> 'a -> t
 
         val split : t -> t VarMap.t
 
         val recheck : Env.t -> Subst.t -> t -> t
 
-        val project : Env.t -> Subst.t -> VarSet.t -> t -> t
+        val project : Env.t -> Subst.t -> t -> VarSet.t -> t
 
         val merge_disjoint : Env.t -> Subst.t -> t -> t -> t
 
@@ -1108,8 +1125,8 @@ module Disequality :
         let is_empty = M.is_empty
 
         let make env subst x y =
-          let id = !next_ind in
-          next_id := !next_id + 1 in
+          let id = !next_id in
+          next_id := !next_id + 1;
           M.singleton id @@ Disjunct.make env subst x y
 
         let split t =
@@ -1129,7 +1146,7 @@ module Disequality :
               with Disequality_fulfilled -> acc
           ) t M.empty
 
-        let merge_disjoint env subst subst =
+        let merge_disjoint env subst =
           M.union (fun _ _ _ ->
             invalid_arg "OCanren fatal (Conjunct.merge_disjoint): conjuncts intersect"
           )
@@ -1145,9 +1162,9 @@ module Disequality :
               (refined, M.add id disj' added)
           ) t' (M.empty, M.empty)
 
-        let remove_subsumed cs =
+        let remove_subsumed env subst cs =
           M.fold (fun id disj acc ->
-            if M.exists (fun _ disj' -> Disjunct.subsumed env subst disj' disj) then
+            if M.exists (fun _ disj' -> Disjunct.subsumed env subst disj' disj) acc then
               (* if new disjunct subsumes some another then we don't add it;
                * that's because we have conjunction of disjuncts and we can keep only
                * the most specialized disjuncts
@@ -1155,42 +1172,47 @@ module Disequality :
               acc
             else
               (* otherwise we should remove all disjuncts that subsume the newly added disjunct *)
-              M.add id disj @@ S.filter (fun disj' -> not (Disjunct.subsumed env disj disj')) acc
+              let acc = M.filter (fun _ disj' -> not (Disjunct.subsumed env subst disj disj')) acc in
+              M.add id disj acc
           ) cs M.empty
 
-        let project env subst fv t =
+        let project env subst t fv =
           let rec helper fv =
             let fv', t' = M.fold (fun id disj ((fv', conj) as acc) ->
               (* left those disjuncts that contain bindings only for variables from [fv],
                * and obtain a set of free variables from terms mentioned in those disjuncts
                *)
-              if Disjunct.is_relevant env subst fv disj then
+              if Disjunct.is_relevant env subst disj fv then
                 let fv' = VarSet.union fv' @@ Disjunct.freevars env subst disj in
                 fv', M.add id disj conj
+              else
+                fv', conj
             ) t (fv, M.empty)
             in
             if VarSet.equal fv fv' then t' else helper fv'
           in
-          remove_subsumed @@ helper fv
+          remove_subsumed env subst @@ helper fv
 
         let reify env subst t x =
           let fv = Subst.freevars env subst x in
-          let t = project env subst fv t in
+          let t = project env subst t fv in
           M.fold (fun _ disj acc ->
-            let bs = Disjunct.reify env subst disj in
-            ListLabels.map acc (fun answ ->
-              ListLabels.fold_left bs ~init:(false, []) ~f:(fun (flag, answs) b ->
-                let changed, answ = Answer.add env answ b in
-                (* if [answ] was not modified and we haven't add unchanged [answ] already ([flag] is [false])
-                 * then we add unchanged [answ]
-                 *)
-                if (not changed) && (not flag) then
-                  (true, answs)
-                else
-                  (flag, answ::answs)
-              ) |> snd
-            ) |> List.concat
-          ) t ~init:[Answer.empty]
+            match Disjunct.reify env subst disj with
+            | None    -> acc
+            | Some bs ->
+              ListLabels.map acc ~f:(fun answ ->
+                ListLabels.fold_left bs ~init:(false, []) ~f:(fun (flag, answs) b ->
+                  let changed, answ = Answer.add env answ b in
+                  (* if [answ] was not modified and we haven't add unchanged [answ] already ([flag] is [false])
+                   * then we add unchanged [answ]
+                   *)
+                  if (not changed) && (not flag) then
+                    (true, answs)
+                  else
+                    (flag, answ::answs)
+                ) |> snd
+              ) |> List.concat
+          ) t [Answer.empty]
 
       end
 
@@ -1200,8 +1222,12 @@ module Disequality :
 
     let empty = VarMap.empty
 
-    let merge_disjoint env subst = VarMap.union (fun _ c1 c2->
-      let c = Conjunct.merge_disjoint env subst c c' in
+    (* merges all conjuncts (linked to different variables) into one *)
+    let combine env subst cstore =
+      VarMap.fold (fun _ -> Conjunct.merge_disjoint env subst) cstore Conjunct.empty
+
+    let merge_disjoint env subst = VarMap.union (fun _ c1 c2 ->
+      let c = Conjunct.merge_disjoint env subst c1 c2 in
       if Conjunct.is_empty c then None else Some c
     )
 
@@ -1219,7 +1245,7 @@ module Disequality :
         try
           let conj = VarMap.find var cstore in
           let cstore = VarMap.remove var cstore in
-          update (Conjunct.recheck env subst conj) cstore
+          update env subst (Conjunct.recheck env subst conj) cstore
         with Not_found -> cstore
       in
       try
@@ -1234,16 +1260,11 @@ module Disequality :
         Some cstore
       with Disequality_violated -> None
 
-    (* merges all conjuncts (linked to different variables) into one *)
-    let combine =
-      VarMap.fold (fun _ -> Conjunct.merge conj acc) cstore Conjunct.empty
-
     let project env subst cstore fv =
-      Conjunct.(split @@ project env subst fv @@ combine cstore)
+      Conjunct.(split @@ project env subst (combine env subst cstore) fv)
 
-    let reify env subst cstore t =
-      let fv = Subst.freevars env subst t in
-      Conjunct.(reify @@ project env subst fv @@ combine cstore)
+    let reify env subst cstore x =
+      Conjunct.reify env subst (combine env subst cstore) x
 
 end
 
