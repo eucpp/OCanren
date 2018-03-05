@@ -655,7 +655,7 @@ module Subst :
     (* [merge env s1 s2] merges two substituions *)
     val merge : Env.t -> t -> t -> t option
 
-    (* [subsumed env s1 s2] checks that s1 is subsumed by s2 (i.e. s2 is more general than s1).
+    (* [subsumed env s1 s2] checks that [s1] is subsumed by [s2] (i.e. [s2] is more general than [s1]).
      *   Subsumption relation forms a partial order on the set of substitutions.
      *)
     val subsumed : Env.t -> t -> t -> bool
@@ -664,6 +664,7 @@ module Subst :
       sig
         type t = Term.t
 
+        (* [subsumed env x y] checks that [x] is subsumed by [y] (i.e. [y] is more general than [x]) *)
         val subsumed : Env.t -> t -> t -> bool
       end
 
@@ -841,7 +842,6 @@ module Subst :
     let subsumed env subst =
       VarMap.for_all (fun var term ->
         match unify ~scope:Var.non_local_scope env subst !!!var term with
-        | None          -> false
         | Some ([], _)  -> true
         | _             -> false
       )
@@ -889,6 +889,8 @@ module Disequality :
     module Answer :
       sig
         type t
+
+        val extract : t -> Var.t -> Term.t list
 
         val subsumed : Env.t -> t -> t -> bool
       end
@@ -944,6 +946,9 @@ module Disequality :
               )
             with Not_found -> false
           ) t'
+
+          let extract t v =
+            try VarMap.find v t with Not_found -> []
 
       end
 
@@ -1081,8 +1086,7 @@ module Disequality :
           ) t VarSet.empty
 
         let subsumed env subst t t' =
-          let to_subst x = Subst.merge_disjoint env subst @@ Subst.of_map x in
-          Subst.subsumed env (to_subst t') (to_subst t)
+          Subst.(subsumed env (of_map t') (of_map t))
 
       end
 
@@ -1326,43 +1330,29 @@ module State :
       | None      -> None
       | Some ctrs -> Some {st with ctrs}
 
-    let merge
-      {env=env1; subst=subst1; ctrs=ctrs1; scope=scope1}
-      {env=env2; subst=subst2; ctrs=ctrs2; scope=scope2} =
-      let env = Env.merge env1 env2 in
-      match Subst.merge env subst1 subst2 with
-      | None       -> None
-      | Some subst -> Some
-        { env; subst
-        ; ctrs  = Disequality.merge env ctrs1 ctrs2
-        ; scope = Var.new_scope ()
-        }
-
     let reify x {env; subst; ctrs} =
-      let rec helper cs forbidden x =
-        Subst.reify env subst !!!x ~f:(fun v ->
-          if List.mem v.Var.index forbidden then v
-          else
-            {v with Var.constraints =
-              ListLabels.filter cs
-                ~f:(let open Binding in fun {var; term} ->
-                  if Var.equal v var then
-                    match Env.var env term with
+      let answ = Subst.reify env subst x in
+      Disequality.reify env subst ctrs x
+      |> List.map (fun diseq ->
+        let rec helper forbidden t =
+          Term.map t
+            ~fval:(fun x -> Term.repr x)
+            ~fvar:(fun v -> Term.repr @@
+              if List.mem v.Var.index forbidden then v
+              else
+                {v with Var.constraints =
+                  Disequality.Answer.extract diseq v
+                  |> List.filter (fun dt ->
+                    match Env.var env dt with
                     | Some u  -> not (List.mem u.Var.index forbidden)
                     | None    -> true
-                  else false
-                )
-              |> List.map (
-                let open Binding in fun {var; term} ->
-                  helper cs (v.Var.index::forbidden) !!!term
-              )
-            }
-        )
-      in
-      let fv = Subst.free_vars env subst x in
-      Disequality.project env subst (Disequality.to_cnf env subst ctrs) fv
-      |> Disequality.cnf_to_dnf
-      |> List.map (fun cs -> env, Obj.magic (helper cs [] x))
+                  )
+                  |> List.map (fun x -> Obj.magic @@ helper (v.Var.index::forbidden) x)
+                }
+            )
+        in
+        (env, Obj.magic @@ helper [] answ)
+      )
 
   end
 
@@ -1736,7 +1726,7 @@ end
 
 let make_rr : Env.t -> ('a, 'b) injected -> ('a, 'b) reified  = fun env x ->
   object (self)
-    method is_open            = Env.has_free_vars env x
+    method is_open            = Env.is_open env x
     method prj                = if self#is_open then raise Not_a_value else !!!x
     method reify reifier      = reifier env x
     method prjc  onvar        = onvar   env x
@@ -1803,6 +1793,8 @@ let run n g h =
 
 (** ************************************************************************* *)
 (** Tabling primitives                                                        *)
+
+(*
 
 module Table :
   sig
@@ -1985,6 +1977,8 @@ module Tabling =
       );
       !g
 end
+
+*)
 
 (* Tracing/debugging stuff *)
 
