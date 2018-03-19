@@ -615,11 +615,6 @@ module Subst :
 
     val split : t -> Binding.t list
 
-    (* [substitute env subst x] - performs a deepwalk of term [x],
-     *   replacing every variable to relevant binding in [subst];
-     *   i.e. it obtains a value of term [x] in [subst] *)
-    val substitute : Env.t -> t -> 'a -> 'a
-
     (* [refresh ?mapping ~scope dst_env src_env subst x] - takes a term [x],
      *   projects [subst] into it
      *   and replaces all stayed free variables
@@ -637,7 +632,7 @@ module Subst :
     (* [freevars env subst x] - returns all free-variables of term [x] *)
     val freevars : Env.t -> t -> 'a -> VarSet.t
 
-    (* [unify ~asymm ~scope env subst x y] performs unification of two terms [x] and [y] in [subst].
+    (* [unify ~subsume ~scope env subst x y] performs unification of two terms [x] and [y] in [subst].
      *   Unification is a process of finding substituion [s] s.t. [s(x) = s(y)].
      *   Returns [None] if two terms are not unifiable.
      *   Otherwise it returns a pair of diff and new substituion.
@@ -664,8 +659,18 @@ module Subst :
       sig
         type t = Term.t
 
+        (* [apply env subst x] - applies [subst] to term [x],
+         *   i.e. replaces every variable to relevant binding in [subst];
+         *)
+        val apply : Env.t -> t -> t -> t
+
+        val lift : ~vartbl:Var.t VarTbl.t -> Env.t -> Env.t -> t -> t
+
         (* [subsumed env x y] checks that [x] is subsumed by [y] (i.e. [y] is more general than [x]) *)
         val subsumed : Env.t -> t -> t -> bool
+
+        val equal : Env.t -> t -> t -> bool
+        val hash  : Env.t -> t -> int
       end
 
     val reify : Env.t -> t -> 'a -> Answer.t
@@ -797,31 +802,8 @@ module Subst :
         Some (helper x y ([], subst))
       with Term.Different_shape | Unification_failed | Occurs_check -> None
 
-    (* let refresh ?(mapping = VarTbl.create 31) ~scope dst_env src_env subst x =
-      let rec helper x = Obj.magic @@
-        map src_env subst (Term.repr x)
-          ~fvar:(fun v ->
-            try
-              Term.repr @@ VarTbl.find mapping v
-            with Not_found ->
-              let new_var = Env.fresh ~scope dst_env in
-              VarTbl.add mapping v !!!new_var;
-              Term.repr @@ new_var
-          )
-          ~fval:(fun t x ->
-            if Term.is_valid_tag t then x
-            else failwith (sprintf "OCanren fatal (Subst.refresh): invalid value (%d)" t)
-          )
-      in
-      mapping, helper x *)
-
-    let substitute env subst x = Obj.magic @@
-      map env subst (Term.repr x)
-        ~fvar:(fun v -> Term.repr v)
-        ~fval:(fun x -> Term.repr x)
-
     let freevars env subst x =
-      Env.freevars env @@ substitute env subst x
+      Env.freevars env @@ apply env subst x
 
     let is_bound = VarMap.mem
 
@@ -850,10 +832,34 @@ module Subst :
       struct
         type t = Term.t
 
+        let apply env subst x = Obj.magic @@
+          map env subst (Term.repr x)
+            ~fvar:(fun v -> Term.repr v)
+            ~fval:(fun x -> Term.repr x)
+
+        let lift ~vartbl env _ x =
+          let rec helper x = Obj.magic @@
+            Term.map (Term.repr x)
+              ~fvar:(fun v ->
+                try
+                  Term.repr @@ VarTbl.find vartbl v
+                with Not_found ->
+                  let new_var = Env.fresh env in
+                  VarTbl.add vartbl v !!!new_var;
+                  Term.repr new_var
+              )
+              ~fval:(fun x -> x)
+          in
+          helper x
+
         let subsumed env x y =
           match unify ~subsume:true ~scope:Var.non_local_scope env empty y x with
           | Some _ -> true
           | None   -> false
+
+        let equal _ = Term.equal
+
+        let hash _ = Term.hash
       end
 
     let reify env subst x =
@@ -892,7 +898,14 @@ module Disequality :
 
         val extract : t -> Var.t -> Term.t list
 
+        val apply : Env.t -> Subst.t -> t -> t
+
+        val lift : ~vartbl:Var.t VarTbl.t -> Env.t -> Env.t -> t -> t
+
         val subsumed : Env.t -> t -> t -> bool
+
+        val equal : Env.t -> t -> t -> bool
+        val hash  : Env.t -> t -> int
       end
 
     val reify : Env.t -> Subst.t -> t -> 'a -> Answer.t list
@@ -900,17 +913,19 @@ module Disequality :
   struct
     module Answer =
       struct
+        module S = Set.Make(Term)
+
         (* answer is a conjunction of single disequalities, i.g. (x =/= 1 /\ y =/= 2);
          * in order to efficiently extract disequalities relevant to particular variable we use map
          *)
-        type t = Term.t list VarMap.t
+        type t = S.t VarMap.t
 
         let empty = VarMap.empty
 
         let add env t = let open Binding in fun {var; term} ->
           try
             let terms = VarMap.find var t in
-            if List.exists (Subst.Answer.subsumed env term) terms then
+            if S.exists (Subst.Answer.subsumed env term) terms then
               (* we should not add new term if it is subsumed by some other term;
                * i.g. [x=/=1] should not be added to [x=/=_.0]
                *)
@@ -920,14 +935,31 @@ module Disequality :
                * i.g. after adding [x=/=_.0] to [x=/=1 /\ x=/=2] answer
                * should be equal to [x=/=_.0]
                *)
-              let terms = ListLabels.filter terms
-                ~f:(fun term' ->
-                  not (Subst.Answer.subsumed env term' term)
-                )
+              let terms = S.filter (fun term' ->
+                not (Subst.Answer.subsumed env term' term)
+              ) terms
               in
-              true, VarMap.add var (term::terms) t
+              true, VarMap.add var (S.add term terms) t
           with Not_found ->
-            true, VarMap.add var [term] t
+            true, VarMap.add var (S.singleton term) t
+
+        let extract t v =
+          try S.elements @@ VarMap.find v t with Not_found -> []
+
+        let apply env subst t =
+          VarMap.fold (fun v terms acc ->
+            match Env.var env @@ Subst.Answer.apply env subst (Obj.magic v) with
+            | None    -> (* TODO *) assert false
+            | Sime v  ->
+              let terms = S.fold (fun term acc ->
+                add_constraint_term env term acc
+              ) terms S.empty
+              in
+              if S.is_empty terms then acc else VarMap.add v terms acc
+          ) t empty
+
+        let lift ~vartbl dst_env src_env =
+          VarMap.map (S.map @@ Subst.Answer.lift ~vartbl dst_env src_env term)
 
         let subsumed env t t' =
           (* we should check that for each binding from [t'] there is
@@ -947,8 +979,17 @@ module Disequality :
             with Not_found -> false
           ) t'
 
-          let extract t v =
-            try VarMap.find v t with Not_found -> []
+        let equal env t t' =
+          VarMap.for_all (fun var terms' ->
+            try
+              let terms = VarMap.find var t in
+              S.for_all (fun term' ->
+                S.exists (fun term ->
+                  Subst.Answer.equal env term term'
+                ) terms
+              ) terms'
+            with Not_found -> false
+          ) t'
 
       end
 
@@ -1794,7 +1835,80 @@ let run n g h =
 (** ************************************************************************* *)
 (** Tabling primitives                                                        *)
 
-(*
+module Answer :
+  sig
+    type t
+
+    val lift : Env.t -> Env.t -> t -> t
+
+    val equal : t -> t -> bool
+    val hash : t -> int
+  end = struct
+    type t = Env.t * Subst.Answer.t * Disequality.Answer.t
+
+    let check_envs_exn env env' =
+      if Env.equal env env' then () else
+        failwith "OCanren fatal (Answer.check_envs): answers from different environments"
+
+    let lift env' (env, s_answ, d_answ) =
+      let vartbl  = VarTbl.create 37 in
+      let s_answ' = Subst.Answer.lift ~vartbl env' env s_answ in
+      let d_answ' = Disequality.Answer.lift ~vartbl env' env d_answ' in
+      (env', s_answ', d_answ')
+
+    let equal (env, s_answ, d_answ) (env', s_answ', d_answ') =
+      check_envs_exn env env';
+      (* first we try to unify terms (without disequalities);
+       * if two answers are equal then the terms are alpha-equivalent;
+       * it means that the unifier should bind only variables-to-variables.
+       *)
+      match Subst.unify ~scope:Var.non_local_scope env s_answ s_answ' with
+      | None              -> false
+      | Some (bs, subst)  ->
+        let alpha_eq = ListLabels.for_all b
+          ~f:(let open Binding in fun {v=var; term} -> Env.is_var env term)
+        in
+        if alpha_eq then
+          (* update and check disequalities *)
+          let d_answ  = Disequality.Answer.apply env subst d_answ  in
+          let d_answ' = Disequality.Answer.apply env subst d_answ' in
+          Disequality.Answer.equal env d_answ d_answ'
+        else
+          false
+      (* update disequalities *)
+      (* let d_answ  = Disequality.Answer.apply env subst d_answ  in
+      let d_answ' = Disequality.Answer.apply env subst d_answ' in
+      List.for_all (let open Binding in fun {v=var; term} ->
+        match Env.var env term with
+        | None   -> false
+        | Some u ->
+          (* now we should check disequalities;
+           * we should check that lists of constraint terms for [v] and [u]
+           * are alpha-equivalent
+           *)
+          let terms  = Disequality.Answer.extract d_answ  v in
+          let terms' = Disequality.Answer.extract d_answ' u in
+          (* NOTE: we know that there are no two constraint terms [t] and [u]
+           * s.t. [t] subsumes [u] or vice versa;
+           * because of it the code below checks that two list of constraint terms
+           * are alpha equal
+           *)
+          ListLabels.for_all terms' ~f:(fun term' ->
+            ListLabels.exists terms ~f:(fun term  ->
+              Term.equal term term'
+            )
+          )
+      ) bs *)
+
+    (*  *)
+    let hash (env, s_answ, d_answ) =
+      check_envs_exn env env';
+      (* TODO: hash constraint terms *)
+      assert (Disequality.Answer.is_empty d_answ);
+      Subst.Answer.hash env s_answ'
+
+  end
+
 
 module Table :
   sig
@@ -1835,15 +1949,15 @@ module Table :
         let add cache answ =
           cache := List.cons answ !cache
 
-        let contains cache (_, answ, diseq) =
+        let contains cache answ =
           ListLabels.exists !cache
-            ~f:(fun (_, answ', diseq') ->
+            ~f:(fun answ' ->
               (* all variables in both terms are renamed to 0 ... n (and constraints are sorted),
                * because of that simple equivalence test is enough.
                * TODO: maybe we need [is_more_general answ' answ] test here
                * TODO: maybe there is more clever way to compare disequalities
                *)
-               (answ = answ') && (diseq = diseq')
+               Answer.equal answ answ'
             )
 
         let consume cache args =
@@ -1863,25 +1977,26 @@ module Table :
               (* delayed thunk starts to consume unseen part of cache  *)
               Stream.suspend ~is_ready @@ fun () -> helper !cache seen
             else
-              (* consume one answer term from cache *)
-              let answ_env, answ_term, answ_ctrs = List.hd iter in
+              (* consume one answer term from cache and `lift` it to the current environment *)
+              let answ = Answer.lift env @@ List.hd iter
+              (* let answ_env, answ_term, answ_ctrs = List.hd iter in *)
               let tail = List.tl iter in
-              (* `lift` answer term to current environment *)
-              let mapping, answ_term = Subst.refresh ~scope env answ_env Subst.empty answ_term in
-              match State.unify (Obj.repr args) answ_term st with
+              (* let mapping, answ_term = Subst.refresh ~scope env answ_env Subst.empty answ_term in *)
+              match State.unify (Obj.repr args) (Answer.term answ) st with
+                | None -> helper tail seen
                 | Some ({subst=subst'; ctrs=ctrs'} as st') ->
                   begin
                   (* `lift` answer constraints to current environment *)
-                  let _, answ_ctrs = Disequality.refresh ~mapping ~scope env answ_env Subst.empty answ_ctrs in
-                  let answ_ctrs = Disequality.of_cnf env answ_ctrs in
-                  (* check answ_ctrs against external substitution *)
-                  match Disequality.recheck env subst' answ_ctrs (Subst.split subst) with
+                  (* let _, answ_ctrs = Disequality.refresh ~mapping ~scope env answ_env Subst.empty answ_ctrs in *)
+                  (* let answ_ctrs = Disequality.of_cnf env answ_ctrs in *)
+
+                  (* check `answ` disequalities against external substitution *)
+                  match Disequality.recheck env subst' (Answer.disequality answ) (Subst.split subst) with
                   | None      -> helper tail seen
                   | Some ctrs ->
-                    let f = Stream.from_fun @@ fun () -> helper tail seen in
-                    Stream.cons {st' with ctrs = Disequality.merge env ctrs' ctrs} f
+                    let st' = {st' with ctrs = Disequality.merge env ctrs' ctrs} in
+                    Stream.(cons st' @@ from_fun @@ fun () -> helper tail seen)
                   end
-                | None -> helper tail seen
           in
           helper !cache []
 
@@ -1911,16 +2026,16 @@ module Table :
       let answ_ctrs = extract_ctrs mapping answ_env env subst ctrs args in
       (answ_env, Obj.repr answ_term, answ_ctrs)
 
-    let master tbl (_, k, _) args g =
+    let master tbl key args g =
       (* create new cache entry in table *)
       let cache = Cache.create () in
-      Hashtbl.add tbl k cache;
+      Hashtbl.add tbl (Answer.term key) cache;
       let open State in fun ({env; subst; ctrs} as st) ->
       (* This `fake` goal checks whether cache already contains new answer.
        * If not then this new answer is added to the cache.
        *)
       let hook ({env=env'; subst=subst'; ctrs=ctrs'} as st') =
-        let answ = extract_answer args st' in
+        let answ = State.reify args st' in
         if not (Cache.contains cache answ) then begin
           Cache.add cache answ;
           (* TODO: we only need to check diff, i.e. [subst' \ subst] *)
@@ -1932,9 +2047,9 @@ module Table :
       in
       (g &&& hook) {st with ctrs = Disequality.empty}
 
-    let slave tbl (_, k, _) args =
+    let slave tbl key args =
       let open State in fun ({env} as st) ->
-      let cache = Hashtbl.find tbl k in
+      let cache = Hashtbl.find tbl (Answer.term key) in
       Cache.consume cache args st
   end
 
@@ -1977,8 +2092,6 @@ module Tabling =
       );
       !g
 end
-
-*)
 
 (* Tracing/debugging stuff *)
 
