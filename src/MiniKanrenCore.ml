@@ -323,7 +323,7 @@ module VarMap =
  *)
 module Term :
   sig
-    type t
+    type t = Obj.t
 
     type value
 
@@ -365,6 +365,7 @@ module Term :
     val equal   : t -> t -> bool
     val compare : t -> t -> int
     val hash    : t -> int
+    (* val show    : t -> string *)
   end = struct
     type t = Obj.t
     type value = Obj.t
@@ -495,18 +496,26 @@ module Term :
           fval init x y
         else raise Different_shape
 
-    let equal = fold2 ~init:true
-      ~fvar:(fun acc v u -> acc && (Var.equal v u))
+    let rec equal x = fold2 x ~init:true
+      ~fvar:(fun acc v u -> acc && (Var.equal v u) && (List.for_all2 equal v.Var.constraints u.Var.constraints))
       ~fval:(fun acc x y -> acc && (x = y))
       ~fk:(fun _ _ _ _ -> false)
 
-    let compare = fold2 ~init:0
-      ~fvar:(fun acc v u -> if acc <> 0 then acc else (Var.compare v u))
-      ~fval:(fun acc x y -> if acc <> 0 then acc else (compare x y))
+    let compare' = compare
+
+    let rec compare x = fold2 x ~init:0
+      ~fvar:(fun acc v u ->
+        if acc <> 0 then acc
+        else
+          let acc = Var.compare v u in
+          if acc <> 0 then acc
+          else List.fold_left2 (fun acc x y -> if acc <> 0 then acc else compare x y) 0 v.Var.constraints u.Var.constraints
+      )
+      ~fval:(fun acc x y -> if acc <> 0 then acc else (compare' x y))
       ~fk:(fun _ _ _ _ -> -1)
 
-    let hash = fold ~init:1
-      ~fvar:(fun acc v -> Hashtbl.hash (acc, Var.hash v))
+    let rec hash x = fold x ~init:1
+      ~fvar:(fun acc v -> Hashtbl.hash (Var.hash v, List.fold_left (fun acc x -> Hashtbl.hash (acc, hash x)) acc v.Var.constraints))
       ~fval:(fun acc x -> Hashtbl.hash (acc, Hashtbl.hash x))
   end
 
@@ -525,6 +534,7 @@ module Env :
     val var           : t -> 'a -> Var.t option
     val freevars      : t -> 'a -> VarSet.t
     val is_open       : t -> 'a -> bool
+    val equal         : t -> t -> bool
   end =
   struct
     type t = {anchor : Var.env; mutable next : int}
@@ -569,6 +579,8 @@ module Env :
           ~fval:(fun _ -> ());
         false
       with Open_Term -> true
+
+    let equal {anchor=a1} {anchor=a2} = (a1 = a2)
   end
 
 module Binding :
@@ -615,16 +627,10 @@ module Subst :
 
     val split : t -> Binding.t list
 
-    (* [refresh ?mapping ~scope dst_env src_env subst x] - takes a term [x],
-     *   projects [subst] into it
-     *   and replaces all stayed free variables
-     *   into fresh variables in destination environment [dst_env].
-     *   Returns a modified term along with a mapping from variables in [src_env] into [dst_env].
-     *   Takes an optional argumet [mapping], in case it is passed a variable from [src_env]
-     *   first is looked up in [mapping] and only if it is not present there
-     *   fresh variable from [dst_env] is allocated.
+    (* [apply env subst x] - applies [subst] to term [x],
+     *   i.e. replaces every variable to relevant binding in [subst];
      *)
-    (* val refresh : ?mapping : Var.t VarTbl.t -> scope:Var.scope -> Env.t -> Env.t -> t -> 'a -> Var.t VarTbl.t * 'a *)
+    val apply : Env.t -> t -> 'a -> 'a
 
     (* [is_bound x subst] - checks whether [x] is bound by [subst] *)
     val is_bound : Var.t -> t -> bool
@@ -659,18 +665,8 @@ module Subst :
       sig
         type t = Term.t
 
-        (* [apply env subst x] - applies [subst] to term [x],
-         *   i.e. replaces every variable to relevant binding in [subst];
-         *)
-        val apply : Env.t -> t -> t -> t
-
-        val lift : ~vartbl:Var.t VarTbl.t -> Env.t -> Env.t -> t -> t
-
         (* [subsumed env x y] checks that [x] is subsumed by [y] (i.e. [y] is more general than [x]) *)
-        val subsumed : Env.t -> t -> t -> bool
-
-        val equal : Env.t -> t -> t -> bool
-        val hash  : Env.t -> t -> int
+        val subsumed : Env.t -> (*Subst.t -> *) t -> t -> bool
       end
 
     val reify : Env.t -> t -> 'a -> Answer.t
@@ -802,6 +798,11 @@ module Subst :
         Some (helper x y ([], subst))
       with Term.Different_shape | Unification_failed | Occurs_check -> None
 
+    let apply env subst x = Obj.magic @@
+      map env subst (Term.repr x)
+        ~fvar:(fun v -> Term.repr v)
+        ~fval:(fun x -> Term.repr x)
+
     let freevars env subst x =
       Env.freevars env @@ apply env subst x
 
@@ -832,34 +833,10 @@ module Subst :
       struct
         type t = Term.t
 
-        let apply env subst x = Obj.magic @@
-          map env subst (Term.repr x)
-            ~fvar:(fun v -> Term.repr v)
-            ~fval:(fun x -> Term.repr x)
-
-        let lift ~vartbl env _ x =
-          let rec helper x = Obj.magic @@
-            Term.map (Term.repr x)
-              ~fvar:(fun v ->
-                try
-                  Term.repr @@ VarTbl.find vartbl v
-                with Not_found ->
-                  let new_var = Env.fresh env in
-                  VarTbl.add vartbl v !!!new_var;
-                  Term.repr new_var
-              )
-              ~fval:(fun x -> x)
-          in
-          helper x
-
         let subsumed env x y =
           match unify ~subsume:true ~scope:Var.non_local_scope env empty y x with
           | Some _ -> true
           | None   -> false
-
-        let equal _ = Term.equal
-
-        let hash _ = Term.hash
       end
 
     let reify env subst x =
@@ -892,20 +869,15 @@ module Disequality :
      *)
     val project : Env.t -> Subst.t -> t -> VarSet.t -> t
 
+    val merge_disjoint : Env.t -> Subst.t -> t -> t -> t
+
     module Answer :
       sig
         type t
 
         val extract : t -> Var.t -> Term.t list
 
-        val apply : Env.t -> Subst.t -> t -> t
-
-        val lift : ~vartbl:Var.t VarTbl.t -> Env.t -> Env.t -> t -> t
-
         val subsumed : Env.t -> t -> t -> bool
-
-        val equal : Env.t -> t -> t -> bool
-        val hash  : Env.t -> t -> int
       end
 
     val reify : Env.t -> Subst.t -> t -> 'a -> Answer.t list
@@ -927,42 +899,29 @@ module Disequality :
             (* we should not add new term if it is subsumed by some other term;
              * i.g. [x=/=1] should not be added to [x=/=_.0]
              *)
-            t
+            terms
           else
             (* remove all terms that are subsumed by newly added;
              * i.g. after adding [x=/=_.0] to [x=/=1 /\ x=/=2] answer
              * should be equal to [x=/=_.0]
              *)
-            let terms = S.filter (fun term' ->
+            S.add term @@ S.filter (fun term' ->
               not @@ Subst.Answer.subsumed env term' term
             ) terms
-            in
-            VarMap.add var (S.add term terms) t
 
         let add env t var term =
           try
-            add_cstr_term env term @@ VarMap.find var t
+            let terms  = VarMap.find var t in
+            let terms' = add_cstr_term env term terms in
+            if terms != terms' then
+              VarMap.add var terms' @@ VarMap.remove var t
+            else
+              t
           with Not_found ->
             VarMap.add var (S.singleton term) t
 
         let extract t v =
           try S.elements @@ VarMap.find v t with Not_found -> []
-
-        let apply env subst t =
-          VarMap.fold (fun v terms acc ->
-            match Env.var env @@ Subst.Answer.apply env subst (Obj.magic v) with
-            | None    -> (* TODO *) assert false
-            | Some v  ->
-              let terms = S.fold (fun term acc ->
-                add_cstr_term env term acc
-              ) terms S.empty
-              in
-              if S.is_empty terms then acc else VarMap.add v terms acc
-          ) t empty
-
-        let lift ~vartbl dst_env src_env =
-
-          VarMap.map (S.map @@ Subst.Answer.lift ~vartbl dst_env src_env term)
 
         let subsumed env t t' =
           (* we should check that for each binding from [t'] there is
@@ -974,33 +933,13 @@ module Disequality :
           VarMap.for_all (fun var terms' ->
             try
               let terms = VarMap.find var t in
-              ListLabels.for_all terms' ~f:(fun term' ->
-                ListLabels.exists terms ~f:(fun term ->
-                  Subst.Answer.subsumed env term term'
-                )
-              )
-            with Not_found -> false
-          ) t'
-
-        let equal env t t' =
-          VarMap.for_all (fun var terms' ->
-            try
-              let terms = VarMap.find var t in
               S.for_all (fun term' ->
                 S.exists (fun term ->
-                  Subst.Answer.equal env term term'
+                  Subst.Answer.subsumed env term term'
                 ) terms
               ) terms'
             with Not_found -> false
           ) t'
-
-        let hash env t =
-          VarMap.fold (fun v terms acc ->
-            Hashtbl.hash (Var.hash v, ListLabels.fold_left terms acc
-              ~f:(fun acc term -> Hashtbl.hash (acc, Term.hash term))
-            )
-          ) t 1
-
       end
 
     (* Disequality constraints are represented as formula in CNF
@@ -1324,6 +1263,87 @@ module Disequality :
 
 end
 
+module Answer :
+  sig
+    type t
+
+    val make : Env.t -> Term.t -> t
+
+    val lift : Env.t -> t -> t
+
+    val env : t -> Env.t
+    val term : t -> Term.t
+    val ctr_term : t -> Term.t
+    val disequality : t -> Disequality.t
+
+    val equal : t -> t -> bool
+    val hash : t -> int
+  end = struct
+    type t = Env.t * Term.t
+
+    let make env t = (env, t)
+
+    let env (env, _) = env
+
+    let term (env, t) =
+      Term.map t
+        ~fval:(fun x -> Term.repr x)
+        ~fvar:(fun v -> Term.repr {v with Var.constraints = []})
+
+    let ctr_term (_, t) = t
+
+    let disequality (env, t) =
+      let rec helper acc x =
+        Term.fold x ~init:acc
+          ~fval:(fun acc _ -> acc)
+          ~fvar:(fun acc v ->
+            ListLabels.fold_left v.Var.constraints ~init:acc
+              ~f:(fun acc ctr_term ->
+                let ctr_term = Term.repr ctr_term in
+                let x = term @@ (env, ctr_term) in
+                let acc =
+                  match Disequality.add env Subst.empty acc (Term.repr v) x with
+                  (* we should not violate disequalities *)
+                  | None     -> assert false
+                  | Some acc -> acc
+                in
+                helper acc ctr_term
+              )
+          )
+      in
+      helper Disequality.empty t
+
+    let lift env' (env, t) =
+      let vartbl = VarTbl.create 31 in
+      let rec helper x =
+        Term.map x
+          ~fval:(fun x -> Term.repr x)
+          ~fvar:(fun v -> Term.repr @@
+            try
+              VarTbl.find vartbl v
+            with Not_found ->
+              let new_var = Env.fresh ~scope:Var.non_local_scope env' in
+              VarTbl.add vartbl v new_var;
+              {new_var with Var.constraints =
+                List.map (fun x -> helper x) v.Var.constraints
+                |> List.sort Term.compare
+              }
+          )
+      in
+      (env', helper t)
+
+    let check_envs_exn env env' =
+      if Env.equal env env' then () else
+        failwith "OCanren fatal (Answer.check_envs): answers from different environments"
+
+    let equal (env, t) (env', t') =
+      check_envs_exn env env';
+      Term.equal t t'
+
+    let hash (env, t) = Term.hash t
+
+  end
+
 module State :
   sig
     type t =
@@ -1342,7 +1362,7 @@ module State :
     val unify : 'a -> 'a -> t -> t option
     val diseq : 'a -> 'a -> t -> t option
 
-    val reify : 'a -> t -> (Env.t * 'a) list
+    val reify : 'a -> t -> Answer.t list
   end = struct
     type t =
       { env   : Env.t
@@ -1399,11 +1419,15 @@ module State :
                     | Some u  -> not (List.mem u.Var.index forbidden)
                     | None    -> true
                   )
-                  |> List.map (fun x -> Obj.magic @@ helper (v.Var.index::forbidden) x)
+                  |> List.map (fun x -> helper (v.Var.index::forbidden) x)
+                  (* TODO: represent [Var.constraints] as [Set];
+                   * TODO: hide all manipulations on [Var.t] inside [Var] module;
+                   *)
+                  |> List.sort Term.compare
                 }
             )
         in
-        (env, Obj.magic @@ helper [] answ)
+        Answer.make env (helper [] answ)
       )
 
   end
@@ -1841,90 +1865,26 @@ let run n g h =
   let adder, reifier, ext, uncurr = n () in
   let args, stream = ext @@ adder g @@ State.empty () in
   Stream.bind stream (fun st -> Stream.of_list @@ State.reify args st)
-  |> Stream.map (fun (env, tup) -> uncurr h @@ reifier tup env)
+  |> Stream.map (fun answ ->
+    uncurr h @@ reifier (Obj.magic @@ Answer.ctr_term answ) (Answer.env answ)
+  )
+
 
 (** ************************************************************************* *)
 (** Tabling primitives                                                        *)
 
-module Answer :
-  sig
-    type t
-
-    val lift : Env.t -> t -> t
-
-    val equal : t -> t -> bool
-    val hash : t -> int
-  end = struct
-    type t = Env.t * Term.t
-
-    let term (env, t) =
-      Term.map t
-        ~fval:(fun x -> x)
-        ~fvar:(fun v -> {v with Var.constraints = []})
-
-    let disequality (env, t) =
-      let helper acc x =
-        Term.fold x ~init:acc
-          ~fval:(fun acc _ -> acc)
-          ~fvar:(fun acc v ->
-            ListLabels.fold_left v.Var.constraints ~init:acc
-              ~f:(fun acc ctr_term ->
-                let acc = helper acc ctr_term in
-                Disequality.add env Subst.empty acc (Obj.repr v) @@ term (env, ctr_term)
-              )
-          )
-      in
-      helper Disequality.empty t
-
-    let lift env' (env, t) =
-      let vartbl = VarTbl.create 31 in
-      let helper x =
-        Term.map x
-          ~fval:helper
-          ~fvar:(fun v ->
-            try
-              Term.repr @@ VarTbl.find vartbl v
-            with Not_found ->
-              let new_var = Env.fresh env' in
-              VarTbl.add vartbl v !!!new_var;
-              Term.repr {new_var with Var.constraints =
-                List.map helper v.Var.constraints
-              }
-          )
-      in
-      (env', helper t)
-
-    let equal (env, t) (env', t') =
-      check_envs_exn env env';
-      Term.equal t t'
-
-    let hash (env, t) =
-      check_envs_exn env env';
-      Term.hash t
-
-  end
-
-
 module Table :
   sig
-    (* Type of `answer` term.
-     * Answer term is a term where all free variables are renamed to 0 ... n.
-     *)
-    type answer
-
     (* Type of table.
      * Table is a map from answer term to the set of answer terms,
-     * i.e. answer -> [answer]
+     * i.e. Answer.t -> [Answer.t]
      *)
     type t
 
     val create   : unit -> t
-    val abstract : 'a -> State.t -> answer
 
-    val master : t -> answer -> 'a -> goal -> goal
-    val slave  : t -> answer -> 'a -> goal
+    val call : t -> ('a -> goal) -> 'a -> goal
   end = struct
-    type answer = Env.t * Obj.t * Disequality.cnf
 
     module Cache :
       sig
@@ -1932,12 +1892,12 @@ module Table :
 
         val create    : unit -> t
 
-        val add       : t -> answer -> unit
-        val contains  : t -> answer -> bool
+        val add       : t -> Answer.t -> unit
+        val contains  : t -> Answer.t -> bool
         val consume   : t -> 'a -> goal
       end =
       struct
-        type t = answer list ref
+        type t = Answer.t list ref
 
         let create () = ref []
 
@@ -1958,7 +1918,6 @@ module Table :
         let consume cache args =
           let open State in fun {env; subst; scope} as st ->
           let st = State.new_scope st in
-          let scope = st.scope in
           (* [helper iter seen] consumes answer terms from cache one by one
            *   until [iter] (i.e. current pointer into cache list) is not equal to [seen]
            *   (i.e. to the head of seen part of the cache list)
@@ -1973,79 +1932,58 @@ module Table :
               Stream.suspend ~is_ready @@ fun () -> helper !cache seen
             else
               (* consume one answer term from cache and `lift` it to the current environment *)
-              let answ = Answer.lift env @@ List.hd iter in
-              (* let answ_env, answ_term, answ_ctrs = List.hd iter in *)
-              let tail = List.tl iter in
-              (* let mapping, answ_term = Subst.refresh ~scope env answ_env Subst.empty answ_term in *)
+              let answ, tail = (Answer.lift env @@ List.hd iter), List.tl iter in
               match State.unify (Obj.repr args) (Answer.term answ) st with
                 | None -> helper tail seen
                 | Some ({subst=subst'; ctrs=ctrs'} as st') ->
                   begin
-                  (* `lift` answer constraints to current environment *)
-                  (* let _, answ_ctrs = Disequality.refresh ~mapping ~scope env answ_env Subst.empty answ_ctrs in *)
-                  (* let answ_ctrs = Disequality.of_cnf env answ_ctrs in *)
-
                   (* check `answ` disequalities against external substitution *)
                   match Disequality.recheck env subst' (Answer.disequality answ) (Subst.split subst) with
                   | None      -> helper tail seen
                   | Some ctrs ->
-                    let st' = {st' with ctrs = Disequality.merge env ctrs' ctrs} in
-                    Stream.(cons st' @@ from_fun @@ fun () -> helper tail seen)
+                    let st' = {st' with ctrs = Disequality.merge_disjoint env subst' ctrs' ctrs} in
+                    Stream.(cons st' (from_fun @@ fun () -> helper tail seen))
                   end
           in
           helper !cache []
 
       end
 
-    type t = (Obj.t, Cache.t) Hashtbl.t
+    module H = Hashtbl.Make(Answer)
 
-    let create () = Hashtbl.create 1031
+    type t = Cache.t H.t
 
-    let empty_diseq =
-      Disequality.to_cnf (Env.create ~anchor:Var.tabling_env) Subst.empty Disequality.empty
+    let make_answ args st =
+      let env = Env.create ~anchor:Var.tabling_env in
+      let [answ] = State.reify args st in
+      Answer.lift env answ
 
-    let abstract args =
-      let open State in fun {env; subst} ->
-      let tenv = Env.create ~anchor:Var.tabling_env in
-      (tenv, Obj.repr @@ snd @@ Subst.refresh ~scope:Var.tabling_scope tenv env subst args, empty_diseq)
+    let create () = H.create 1031
 
-    let extract_ctrs mapping answ_env env subst ctrs args =
-      let fv = Subst.free_vars env subst args in
-      let cs = Disequality.project env subst (Disequality.to_cnf env subst ctrs) fv in
-      Disequality.normalize @@ snd @@ Disequality.refresh ~mapping ~scope:Var.tabling_scope answ_env env subst cs
-
-    let extract_answer args =
-      let open State in fun {env; subst; ctrs} ->
-      let answ_env = Env.create ~anchor:Var.tabling_env in
-      let mapping, answ_term = Subst.refresh ~scope:Var.tabling_scope answ_env env subst args in
-      let answ_ctrs = extract_ctrs mapping answ_env env subst ctrs args in
-      (answ_env, Obj.repr answ_term, answ_ctrs)
-
-    let master tbl key args g =
-      (* create new cache entry in table *)
-      let cache = Cache.create () in
-      Hashtbl.add tbl (Answer.term key) cache;
-      let open State in fun ({env; subst; ctrs} as st) ->
-      (* This `fake` goal checks whether cache already contains new answer.
-       * If not then this new answer is added to the cache.
-       *)
-      let hook ({env=env'; subst=subst'; ctrs=ctrs'} as st') =
-        let answ = State.reify args st' in
-        if not (Cache.contains cache answ) then begin
-          Cache.add cache answ;
-          (* TODO: we only need to check diff, i.e. [subst' \ subst] *)
-          match Disequality.recheck env subst' ctrs (Subst.split subst') with
-          | Some ctrs -> success {st' with ctrs = Disequality.merge env ctrs ctrs'}
-          | None      -> failure ()
-        end
-        else failure ()
-      in
-      (g &&& hook) {st with ctrs = Disequality.empty}
-
-    let slave tbl key args =
-      let open State in fun ({env} as st) ->
-      let cache = Hashtbl.find tbl (Answer.term key) in
-      Cache.consume cache args st
+    let call tbl g args = let open State in fun ({env; subst; ctrs} as st) ->
+      (* we abstract away disequality constraints before lookup in the table *)
+      let st = {st with ctrs = Disequality.empty} in
+      let key = make_answ args st in
+      try
+        (* slave call *)
+        Cache.consume (H.find tbl key) args st
+      with Not_found ->
+        (* master call *)
+        let cache = Cache.create () in
+        H.add tbl key cache;
+        (* auxiliary goal for addition of new answer to cache  *)
+        let hook ({env=env'; subst=subst'; ctrs=ctrs'} as st') =
+          let answ = make_answ args st' in
+          if not (Cache.contains cache answ) then begin
+            Cache.add cache answ;
+            (* TODO: we only need to check diff, i.e. [subst' \ subst] *)
+            match Disequality.recheck env subst' ctrs (Subst.split subst') with
+            | Some ctrs -> success {st' with ctrs = Disequality.merge_disjoint env subst' ctrs ctrs'}
+            | None      -> failure ()
+          end
+          else failure ()
+        in
+        ((g args) &&& hook) st
   end
 
 module Tabling =
@@ -2062,29 +2000,18 @@ module Tabling =
     let four  () = succ three ()
     let five  () = succ four ()
 
-    let tabled' tbl g args st =
-      let key = Table.abstract args st in
-      try
-        Table.slave tbl key args st
-      with Not_found ->
-        Table.master tbl key args (g args) st
-
     let tabled n g =
       let tbl = Table.create () in
       let currier, uncurrier = n () in
-      currier (fun tup ->
-        tabled' tbl (uncurrier g) tup
-      )
+      currier (Table.call tbl @@ uncurrier g)
 
     let tabledrec n g_norec =
       let tbl = Table.create () in
       let currier, uncurrier = n () in
       let g = ref (fun _ -> assert false) in
       let g_rec args = uncurrier (g_norec !g) args in
-      let g_tabled = tabled' tbl g_rec in
-      g := currier (fun tup ->
-        g_tabled tup
-      );
+      let g_tabled = Table.call tbl g_rec in
+      g := currier g_tabled;
       !g
 end
 
