@@ -362,10 +362,11 @@ module Term :
       fk:('a -> label -> Var.t -> t -> 'a) ->
       init:'a -> t -> t -> 'a
 
+    val show : t -> string
+
     val equal   : t -> t -> bool
     val compare : t -> t -> int
     val hash    : t -> int
-    (* val show    : t -> string *)
   end = struct
     type t = Obj.t
     type value = Obj.t
@@ -435,6 +436,33 @@ module Term :
       else begin
         is_valid_tag_exn tx;
         fval x
+      end
+
+    let rec show x =
+      let tx = Obj.tag x in
+      if (is_box tx) then
+        let sx = Obj.size x in
+        if is_var tx sx x then
+          let v = Obj.magic x in
+          match v.Var.constraints with
+          | [] -> Printf.sprintf "_.%d" v.Var.index
+          | cs -> Printf.sprintf "_.%d{=/= %s}" v.Var.index (String.concat "; " @@ List.map show cs)
+        else
+          let rec inner i =
+            if i < sx then
+              (show @@ Obj.field x i)::(inner (i+1))
+            else []
+          in
+          Printf.sprintf "boxed %d <%s>" tx (String.concat ", " @@ inner 0)
+      else begin
+        is_valid_tag_exn tx;
+        if tx = Obj.int_tag then
+          Printf.sprintf "int<%d>" @@ Obj.magic x
+        else if tx = Obj.string_tag then
+          Printf.sprintf "string<%s>" @@ Obj.magic x
+        else if tx = Obj.double_tag then
+          Printf.sprintf "double<%e>" @@ Obj.magic x
+        else assert false
       end
 
     let rec fold ~fvar ~fval ~init x =
@@ -522,6 +550,7 @@ module Term :
     let rec hash x = fold x ~init:1
       ~fvar:(fun acc v -> Hashtbl.hash (Var.hash v, List.fold_left (fun acc x -> Hashtbl.hash (acc, hash x)) acc v.Var.constraints))
       ~fval:(fun acc x -> Hashtbl.hash (acc, Hashtbl.hash x))
+
   end
 
 let (!!!) = Obj.magic
@@ -761,12 +790,13 @@ module Subst :
        * 2) If we do unification after a fresh, then in case of failure it doesn't matter if
        *    the variable is be distructively substituted: we will not look on it in future.
        *)
-      if scope = var.scope
+      (* if scope = var.scope
       then begin
         var.subst <- Some (Obj.repr term);
         subst
       end
-        else VarMap.add var (Term.repr term) subst
+        else  *)
+          VarMap.add var (Term.repr term) subst
 
     exception Unification_failed
 
@@ -1279,7 +1309,7 @@ module Answer :
     val env : t -> Env.t
     val term : t -> Term.t
     val ctr_term : t -> Term.t
-    val disequality : t -> Disequality.t
+    val disequality : t -> Binding.t list
 
     val equal : t -> t -> bool
     val hash : t -> int
@@ -1301,22 +1331,18 @@ module Answer :
       let rec helper acc x =
         Term.fold x ~init:acc
           ~fval:(fun acc _ -> acc)
-          ~fvar:(fun acc v ->
-            ListLabels.fold_left v.Var.constraints ~init:acc
+          ~fvar:(fun acc var ->
+            ListLabels.fold_left var.Var.constraints ~init:acc
               ~f:(fun acc ctr_term ->
                 let ctr_term = Term.repr ctr_term in
-                let x = term @@ (env, ctr_term) in
-                let acc =
-                  match Disequality.add env Subst.empty acc (Term.repr v) x with
-                  (* we should not violate disequalities *)
-                  | None     -> assert false
-                  | Some acc -> acc
-                in
+                let var = {var with Var.constraints = []} in
+                let term = term @@ (env, ctr_term) in
+                let acc = Binding.({var; term})::acc in
                 helper acc ctr_term
               )
           )
       in
-      helper Disequality.empty t
+      helper [] t
 
     let lift env' (env, t) =
       let vartbl = VarTbl.create 31 in
@@ -1936,20 +1962,24 @@ module Table :
               (* delayed thunk starts to consume unseen part of cache  *)
               Stream.suspend ~is_ready @@ fun () -> helper !cache seen
             else
-              (* (Printf.printf "cache length %d\n%!" (List.length iter); *)
               (* consume one answer term from cache and `lift` it to the current environment *)
               let answ, tail = (Answer.lift env @@ List.hd iter), List.tl iter in
-              (* Printf.printf "Try answer!\n%!"; *)
               match State.unify (Obj.repr args) (Answer.term answ) st with
                 | None -> helper tail seen
                 | Some ({subst=subst'; ctrs=ctrs'} as st') ->
                   begin
-                  (* Printf.printf "Success\n%!"; *)
                   (* check `answ` disequalities against external substitution *)
-                  match Disequality.recheck env subst' (Answer.disequality answ) (Subst.split subst') with
+                  let ctrs = ListLabels.fold_left (Answer.disequality answ) ~init:Disequality.empty
+                    ~f:(let open Binding in fun acc {var; term} ->
+                      match Disequality.add env Subst.empty acc (Term.repr var) term with
+                      (* we should not violate disequalities *)
+                      | None     -> assert false
+                      | Some acc -> acc
+                    )
+                  in
+                  match Disequality.recheck env subst' ctrs (Subst.split subst') with
                   | None      -> helper tail seen
                   | Some ctrs ->
-                    (* Printf.printf "Success x2\n%!"; *)
                     let st' = {st' with ctrs = Disequality.merge_disjoint env subst' ctrs' ctrs} in
                     Stream.(cons st' (from_fun @@ fun () -> helper tail seen))
                   end
@@ -1989,10 +2019,7 @@ module Table :
             match Disequality.recheck env subst' ctrs (Subst.split subst') with
             | None      -> failure ()
             | Some ctrs ->
-              (* match Disequality.recheck env subst' ctrs' (Subst.split subst) with
-              | None        -> failure ()
-              | Some ctrs'  -> *)
-                success {st' with ctrs = Disequality.merge_disjoint env subst' ctrs ctrs'}
+              success {st' with ctrs = Disequality.merge_disjoint env subst' ctrs ctrs'}
           end
           else failure ()
         in
