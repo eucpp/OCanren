@@ -497,7 +497,12 @@ module Term :
         else raise Different_shape
 
     let rec equal x = fold2 x ~init:true
-      ~fvar:(fun acc v u -> acc && (Var.equal v u) && (List.for_all2 equal v.Var.constraints u.Var.constraints))
+      ~fvar:(fun acc v u ->
+        acc &&
+        (Var.equal v u) &&
+        (List.length v.Var.constraints = List.length u.Var.constraints) &&
+        (List.for_all2 equal v.Var.constraints u.Var.constraints)
+      )
       ~fval:(fun acc x y -> acc && (x = y))
       ~fk:(fun _ _ _ _ -> false)
 
@@ -1931,16 +1936,20 @@ module Table :
               (* delayed thunk starts to consume unseen part of cache  *)
               Stream.suspend ~is_ready @@ fun () -> helper !cache seen
             else
+              (* (Printf.printf "cache length %d\n%!" (List.length iter); *)
               (* consume one answer term from cache and `lift` it to the current environment *)
               let answ, tail = (Answer.lift env @@ List.hd iter), List.tl iter in
+              (* Printf.printf "Try answer!\n%!"; *)
               match State.unify (Obj.repr args) (Answer.term answ) st with
                 | None -> helper tail seen
                 | Some ({subst=subst'; ctrs=ctrs'} as st') ->
                   begin
+                  (* Printf.printf "Success\n%!"; *)
                   (* check `answ` disequalities against external substitution *)
-                  match Disequality.recheck env subst' (Answer.disequality answ) (Subst.split subst) with
+                  match Disequality.recheck env subst' (Answer.disequality answ) (Subst.split subst') with
                   | None      -> helper tail seen
                   | Some ctrs ->
+                    (* Printf.printf "Success x2\n%!"; *)
                     let st' = {st' with ctrs = Disequality.merge_disjoint env subst' ctrs' ctrs} in
                     Stream.(cons st' (from_fun @@ fun () -> helper tail seen))
                   end
@@ -1978,8 +1987,12 @@ module Table :
             Cache.add cache answ;
             (* TODO: we only need to check diff, i.e. [subst' \ subst] *)
             match Disequality.recheck env subst' ctrs (Subst.split subst') with
-            | Some ctrs -> success {st' with ctrs = Disequality.merge_disjoint env subst' ctrs ctrs'}
             | None      -> failure ()
+            | Some ctrs ->
+              (* match Disequality.recheck env subst' ctrs' (Subst.split subst) with
+              | None        -> failure ()
+              | Some ctrs'  -> *)
+                success {st' with ctrs = Disequality.merge_disjoint env subst' ctrs ctrs'}
           end
           else failure ()
         in

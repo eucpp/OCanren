@@ -411,7 +411,6 @@ val qrstu : unit ->
         [let g = Tabling.(tabledrec one) (fun grec q -> (q === O) ||| (fresh (n) (q === S n) &&& (grec n)))]
  *)
 
-(*
 module Tabling :
   sig
     val succ : (unit -> (('a -> 'b) -> 'c) * ('d -> 'e -> 'f)) ->
@@ -463,7 +462,7 @@ module Tabling :
        ('d -> 'a -> State.t Stream.t goal')) ->
       (('b -> 'c) -> 'd) -> 'b -> 'c
   end
-*)
+
 
 (** {2 Building reifiers for a custom type compositionally} *)
 module type T1 =
