@@ -1248,8 +1248,6 @@ module Disequality :
 
     type t = Conjunct.t VarMap.t
 
-    type dnf = Binding.t list list
-
     let empty = VarMap.empty
 
     (* merges all conjuncts (linked to different variables) into one *)
@@ -2001,8 +1999,8 @@ module Table :
 
     let call tbl g args = let open State in fun ({env; subst; ctrs} as st) ->
       (* we abstract away disequality constraints before lookup in the table *)
-      let st = {st with ctrs = Disequality.empty} in
-      let key = make_answ args st in
+      let abs_st = {st with ctrs = Disequality.empty} in
+      let key = make_answ args abs_st in
       try
         (* slave call *)
         Cache.consume (H.find tbl key) args st
@@ -2016,6 +2014,7 @@ module Table :
           if not (Cache.contains cache answ) then begin
             Cache.add cache answ;
             (* TODO: we only need to check diff, i.e. [subst' \ subst] *)
+            (* Printf.printf "subst': %s\n" (Term.(show @@ repr @@ Subst.split subst')); *)
             match Disequality.recheck env subst' ctrs (Subst.split subst') with
             | None      -> failure ()
             | Some ctrs ->
@@ -2023,7 +2022,7 @@ module Table :
           end
           else failure ()
         in
-        ((g args) &&& hook) st
+        ((g args) &&& hook) abs_st
   end
 
 module Tabling =
