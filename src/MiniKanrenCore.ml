@@ -1915,6 +1915,8 @@ module Table :
     val call : t -> ('a -> goal) -> 'a -> goal
   end = struct
 
+    module H = Hashtbl.Make(Answer)
+
     module Cache :
       sig
         type t
@@ -1926,25 +1928,26 @@ module Table :
         val consume   : t -> 'a -> goal
       end =
       struct
-        type t = Answer.t list ref
+        (* Cache is a pair of queue-like list of answers plus hashtbl of answers;
+         * Queue is used because new answers may arrive during the search,
+         * we store this new answers to the end of the queue while read from the beginning.
+         * Hashtbl is used for a quick check that new added answer is not already contained in the cache.
+         *)
+        type t = Answer.t list ref * unit H.t
 
-        let create () = ref []
+        let create () = (ref [], H.create 1031)
 
-        let add cache answ =
-          cache := List.cons answ !cache
+        let add (cache, tbl) answ =
+          cache := List.cons answ !cache;
+          H.add tbl answ ()
 
-        let contains cache answ =
-          ListLabels.exists !cache
-            ~f:(fun answ' ->
-              (* all variables in both terms are renamed to 0 ... n (and constraints are sorted),
-               * because of that simple equivalence test is enough.
-               * TODO: maybe we need [is_more_general answ' answ] test here
-               * TODO: maybe there is more clever way to compare disequalities
-               *)
-               Answer.equal answ answ'
-            )
+        let contains (_, tbl) answ =
+          try
+            H.find tbl answ;
+            true
+          with Not_found -> false
 
-        let consume cache args =
+        let consume (cache, _) args =
           let open State in fun {env; subst; scope} as st ->
           let st = State.new_scope st in
           (* [helper iter seen] consumes answer terms from cache one by one
@@ -1986,8 +1989,6 @@ module Table :
 
       end
 
-    module H = Hashtbl.Make(Answer)
-
     type t = Cache.t H.t
 
     let make_answ args st =
@@ -2008,7 +2009,7 @@ module Table :
         (* master call *)
         let cache = Cache.create () in
         H.add tbl key cache;
-        (* auxiliary goal for addition of new answer to cache  *)
+        (* auxiliary goal for addition of new answer to the cache  *)
         let hook ({env=env'; subst=subst'; ctrs=ctrs'} as st') =
           let answ = make_answ args st' in
           if not (Cache.contains cache answ) then begin
