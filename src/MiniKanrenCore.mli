@@ -168,6 +168,8 @@ val conde : goal list -> goal
 *)
 val (?&) : goal list -> goal
 
+val (?~) : goal -> goal
+
 (** {2 Some predefined goals} *)
 
 (** [success] always succeeds *)

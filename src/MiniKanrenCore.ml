@@ -1396,6 +1396,8 @@ module State :
     val unify : 'a -> 'a -> t -> t option
     val diseq : 'a -> 'a -> t -> t option
 
+    val complement : t -> t -> t list
+
     val reify : 'a -> t -> Answer.t list
   end = struct
     type t =
@@ -1435,6 +1437,14 @@ module State :
       match Disequality.add env subst ctrs x y with
       | None      -> None
       | Some ctrs -> Some {st with ctrs}
+
+    let complement
+      ({env=env1; subst=subst1; ctrs=ctrs1} as st1)
+      ({env=env2; subst=subst2; ctrs=ctrs2} as st2) =
+      let subst = Subst.diff subst1 subst2 in
+      let ctrs = Disequality.diff ctrs1 ctrs2 in
+
+
 
     let reify x {env; subst; ctrs} =
       let answ = Subst.reify env subst x in
@@ -1505,6 +1515,22 @@ let (?|) gs st =
   inner gs |> (fun g -> Stream.from_fun (fun () -> g st))
 
 let conde = (?|)
+
+exception Empty_stream
+
+let (?~) g st =
+  let complement sts cex =
+    if List.length sts = 0 then raise Empty_stream else ();
+    List.map (fun st -> State.complement st cex) sts
+    |> List.concat
+  in
+  let st = State.enter_strat st in
+  let cexs = g st in
+  try
+    Stream.fold complement [st] cexs |>
+    List.map State.leave_strat |>
+    Stream.of_list
+  with Empty_stream -> Stream.nil
 
 let call_fresh f st =
   let x = State.fresh st in
