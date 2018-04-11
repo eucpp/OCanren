@@ -259,8 +259,6 @@ module Var =
 
     let non_local_scope = -6
 
-    let tabling_scope = -7
-
     let new_scope =
       let scope = ref 0 in
       fun () -> (incr scope; !scope)
@@ -683,7 +681,7 @@ module Subst :
      *   This can be used to perform subsumption check:
      *   [y] is subsumed by [x] (i.e. [x] is more general than [x]) if such a unification succeeds.
      *)
-    val unify : ?subsume:bool -> scope:Var.scope -> Env.t -> t -> 'a -> 'a -> (Binding.t list * t) option
+    val unify : ?subsume:bool -> ?scope:Var.scope -> Env.t -> t -> 'a -> 'a -> (Binding.t list * t) option
 
     val merge_disjoint : Env.t -> t -> t -> t
 
@@ -790,17 +788,17 @@ module Subst :
        * 2) If we do unification after a fresh, then in case of failure it doesn't matter if
        *    the variable is be distructively substituted: we will not look on it in future.
        *)
-      (* if scope = var.scope
+      if (scope = var.scope) && (scope <> Var.non_local_scope)
       then begin
         var.subst <- Some (Obj.repr term);
         subst
       end
-        else  *)
+        else
           VarMap.add var (Term.repr term) subst
 
     exception Unification_failed
 
-    let unify ?(subsume=false) ~scope env subst x y =
+    let unify ?(subsume=false) ?(scope=Var.non_local_scope) env subst x y =
       (* The idea is to do the unification and collect the unification prefix during the process *)
       let extend var term (prefix, subst) =
         let subst = extend ~scope env subst var term in
@@ -845,7 +843,7 @@ module Subst :
 
     let merge env subst1 subst2 = VarMap.fold (fun var term -> function
       | Some s  -> begin
-        match unify ~scope:Var.non_local_scope env s !!!var term with
+        match unify env s !!!var term with
         | Some (_, s') -> Some s'
         | None         -> None
         end
@@ -859,7 +857,7 @@ module Subst :
 
     let subsumed env subst =
       VarMap.for_all (fun var term ->
-        match unify ~scope:Var.non_local_scope env subst !!!var term with
+        match unify env subst !!!var term with
         | Some ([], _)  -> true
         | _             -> false
       )
@@ -869,7 +867,7 @@ module Subst :
         type t = Term.t
 
         let subsumed env x y =
-          match unify ~subsume:true ~scope:Var.non_local_scope env empty y x with
+          match unify ~subsume:true env empty y x with
           | Some _ -> true
           | None   -> false
       end
@@ -1053,7 +1051,7 @@ module Disequality :
           | Refined of Binding.t list
 
         let refine env subst x y =
-          match Subst.unify ~scope:Var.non_local_scope env subst x y with
+          match Subst.unify env subst x y with
           | None              -> Fulfiled
           | Some ([], _)      -> Violated
           | Some (prefix, _)  -> Refined prefix
