@@ -1516,11 +1516,10 @@ module State :
       (* try to merge new substituions into original substituion *)
       let sts = ListLabels.fold_left substs ~init:[]
         ~f:(fun acc subst ->
-          let subst = Subst.merge_disjoint env1 subst dsubst in
           match Subst.merge env1 subst1 subst with
-          | None        -> acc
+          | None                  -> acc
           | Some (prefix, subst)  ->
-            match Disequality.recheck env1 subst1 ctrs1 prefix with
+            match Disequality.recheck env1 subst ctrs1 prefix with
             | None       -> acc
             | Some ctrs  -> {st1 with subst; ctrs}::acc
         )

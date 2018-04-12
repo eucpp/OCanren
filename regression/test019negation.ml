@@ -27,24 +27,26 @@ let _ =
   runInt       (-1) q qh (REPR (fun q -> (q === !1) &&& ?~(q === !2)));
 
   (* test that conjunction and disjunction under negation behave properly *)
-  (* runIList     (-1) q qh (REPR (fun q -> (fresh (x y) ((x =/= !1) ||| (y =/= !2)) (q === !![x; y]))));
-  runIList     (-1) q qh (REPR (fun q -> (fresh (x y) ((x =/= !1) &&& (y =/= !2)) (q === !![x; y]))));
-
+  runIList     (-1) q qh (REPR (fun q -> (fresh (x y)   ((x =/= !1) ||| (y =/= !2)) (q === !![x; y]))));
   runIList     (-1) q qh (REPR (fun q -> (fresh (x y) ?~((x === !1) &&& (y === !2)) (q === !![x; y]))));
+
+  runIList     (-1) q qh (REPR (fun q -> (fresh (x y)   ((x =/= !1) &&& (y =/= !2)) (q === !![x; y]))));
   runIList     (-1) q qh (REPR (fun q -> (fresh (x y) ?~((x === !1) ||| (y === !2)) (q === !![x; y]))));
 
-  runIList     (-1) q qh (REPR (fun q -> (fresh (x y) (q === !![x; y]) (q =/= !![!1; !2]))));
+
+
+  (* runIList     (-1) q qh (REPR (fun q -> (fresh (x y) (q === !![x; y]) (q =/= !![!1; !2]))));
   runIList     (-1) q qh (REPR (fun q -> (fresh (x y) (q === !![x; y]) ?~((x === !1) &&& (y === !2))))); *)
 
   (* test lists (implicit conjuncion) *)
-  (* runIList     (-1) q qh (REPR (fun q -> (fresh (x)   (q =/= !![!1; x; !2]))));
-  runIList     (-1) q qh (REPR (fun q -> (fresh (x) ?~(q === !![!1; x; !2])))); *)
+  runIList     (-1) q qh (REPR (fun q -> (fresh (x)   (q =/= !![!1; x; !2]))));
+  runIList     (-1) q qh (REPR (fun q -> (fresh (x) ?~(q === !![!1; x; !2]))));
 
   (* test that negation of infinite goals is able to terminate if arguments are ground enough *)
   (* runNat       (-1) q qh (REPR (fun q -> (fresh (n) (n === nat 3) ?~(peano n)))); *)
 
   (* test contradiction *)
-  (* runInt       (-1) q qh (REPR (fun q -> ?~((q === !1) ||| (q =/= !1)))) *)
+  runInt       (-1) q qh (REPR (fun q -> ?~((q === !1) ||| (q =/= !1))))
 
   (* test `fresh` under negation *)
 
