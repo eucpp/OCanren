@@ -253,6 +253,8 @@ module Var =
     type scope  = int
     type anchor = int list
 
+    type quantifier = Exist | Univ
+
     let tabling_env = -1
 
     let unused_index = -1
@@ -269,24 +271,27 @@ module Var =
       anchor        : anchor;
       env           : env;
       index         : int;
+      strata        : int;
       mutable subst : Obj.t option;
       scope         : scope;
       constraints   : Obj.t list
     }
 
-    let make ~env ~scope index = {
+    let make ~env ~scope ~strata index = {
       env         = env;
       anchor      = global_anchor;
       subst       = None;
       constraints = [];
       index;
+      strata;
       scope;
     }
 
     let dummy =
       let env   = 0 in
       let scope = 0 in
-      make ~env ~scope 0
+      let strata = -1 in
+      make ~env ~scope ~strata 0
 
     let valid_anchor anchor =
       anchor == global_anchor
@@ -566,36 +571,79 @@ module Env :
 
     val empty         : unit -> t
     val create        : anchor:Var.env -> t
-    val fresh         : scope:Var.scope -> t -> 'a
+
+    val enter_strata  : t -> unit
+    val leave_strata  : t -> unit
+
     val check         : t -> Var.t -> bool
     val check_exn     : t -> Var.t -> unit
+
+    val fresh         : scope:Var.scope -> t -> 'a
+
     val is_var        : t -> 'a -> bool
     val var           : t -> 'a -> Var.t option
+
+    val quantifier    : t -> Var.t -> Var.quantifier
+
     val freevars      : t -> 'a -> VarSet.t
     val is_open       : t -> 'a -> bool
+
     val equal         : t -> t -> bool
   end =
   struct
-    type t = {anchor : Var.env; mutable next : int}
+    type t =
+      { anchor : Var.env
+      (* Counter for allocation of new variables *)
+      ; mutable next_var : int
+      (* Environment keeps number of current strata *)
+      ; mutable strata : int
+      (* Counter for allocation of new stratas *)
+      ; mutable next_strata : int
+      (* There is a partial order on all stratas.
+       * We use a hash-table in order to maintain this relation.
+       * An entry (s, s') in hash-table means that [s -> s'].
+       *)
+      ; stratord      : (int, int) Hashtbl.t
+      }
 
-    let last_anchor = ref 11
-    let first_var = 10
+    let last_anchor   = ref 11
+    let first_var     = 10
+    let first_strata  = 0
+
+    let create ~anchor =
+      let next_var    = first_var in
+      let strata      = first_strata in
+      let next_strata = first_strata in
+      let stratord    = Hashtbl.create 31 in
+      Hashtbl.add stratord strata strata;
+      { anchor; next_var; strata; next_strata; stratord }
 
     let empty () =
       incr last_anchor;
-      {anchor = !last_anchor; next = first_var}
+      create ~anchor:!last_anchor
 
-    let create ~anchor = {anchor; next = first_var}
+    let parent_strata stratord strata =
+      Hashtbl.find stratord strata
 
-    let fresh ~scope e =
-      let v = !!!(Var.make ~env:e.anchor ~scope e.next) in
-      e.next <- 1 + e.next;
-      !!!v
+    let enter_strata env =
+      let new_strata = 1 + env.next_strata in
+      Hashtbl.add env.stratord new_strata env.strata;
+      env.next_strata <- new_strata;
+      env.strata      <- new_strata;
+      ()
+
+    let leave_strata env =
+      env.strata <- parent_strata env.stratord env.strata
 
     let check env v = (v.Var.env = env.anchor)
 
     let check_exn env v =
       if check env v then () else failwith "OCanren fatal (Env.check): wrong environment"
+
+    let fresh ~scope e =
+      let v = !!!(Var.make ~env:e.anchor ~strata:e.strata ~scope e.next_var) in
+      e.next_var <- 1 + e.next_var;
+      !!!v
 
     let var env x =
       match Term.var x with
@@ -603,6 +651,35 @@ module Env :
       | None            -> None
 
     let is_var env x = (var env x) <> None
+
+    let quantifier env x =
+      let rec helper i s =
+        if s = env.strata then
+          if (i mod 2) = 0 then
+            ((*Printf.printf "var %d is exist. quant.\n" x.Var.index;*)
+            Var.Exist)
+          else
+            ((*Printf.printf "var %d is univ. quant.\n" x.Var.index;*)
+            Var.Univ)
+        else
+        let s' = parent_strata env.stratord s in
+        if s = s' then
+          ((*Printf.printf "var %d is exist. quant.\n" x.Var.index;*)
+          Var.Exist)
+        else
+          helper (i+1) s'
+      in
+      helper 0 x.Var.strata
+        (* if s = env.strata then i else helper (i+1) @@ parent_strata env.stratord s
+      in
+      (* Printf.printf "var  strata %d; env strata %d\n%!" x.Var.strata env.strata; *)
+      let i = helper 0 x.Var.strata in
+      if (i mod 2) = 0 then
+        (Printf.printf "var %d is exist. quant.\n" x.Var.index;
+        Var.Exist)
+      else
+        (Printf.printf "var %d is univ. quant.\n" x.Var.index;
+        Var.Univ) *)
 
     let freevars env x =
       Term.fold (Term.repr x) ~init:VarSet.empty
@@ -631,6 +708,11 @@ module Binding :
 
     val is_relevant : Env.t -> VarSet.t -> t -> bool
 
+    val is_exist_quant : Env.t -> t -> bool
+    val is_univ_quant  : Env.t -> t -> bool
+
+    val partition : Env.t -> t list -> t list * t list
+
     val equal : t -> t -> bool
     val compare : t -> t -> int
     val hash : t -> int
@@ -644,6 +726,18 @@ module Binding :
     let is_relevant env vs {var; term} =
       (VarSet.mem var vs) ||
       (match Env.var env term with Some v -> VarSet.mem v vs | None -> false)
+
+    let is_exist_quant env {var; term} =
+      match Env.quantifier env var with
+      | Var.Univ  -> false
+      | Var.Exist ->
+        match Env.var env term with
+        | Some v -> Env.quantifier env v = Var.Exist
+        | None   -> true
+
+    let is_univ_quant env b = not @@ is_exist_quant env b
+
+    let partition env = List.partition (is_exist_quant env)
 
     let equal {var=v; term=t} {var=u; term=p} =
       (Var.equal v u) || (Term.equal t p)
@@ -1017,6 +1111,12 @@ module Disequality :
      * There is no need to check previous samples in the future (because its assumption is already broken in current substitution)
     *)
 
+    (* [Disjunct] is a set of single disequalities joint by disjunction.
+     *   Each instance of [Disjunct] corresponds to anti-subsumption constraint
+     *   of the form `forall (x) (u =/= t)` where
+     *   - `x` is a set of universally quantified variables
+     *   - `u` and `t` are two terms, that might contain universally, existentially or free variables.
+     *)
     module Disjunct :
       sig
         (* Disjunction.t is a set of single disequalities joint by disjunction *)
@@ -1048,23 +1148,53 @@ module Disequality :
         val reify : Env.t -> Subst.t -> t -> Binding.t list option
       end =
       struct
-        type t = Term.t VarMap.t
+        type t =
+          (* We a maintain two separate substitutions:
+           * one for existentially quantified variables and one for universally quantified;
+           * During the search we will refine disequality,
+           * trying to remove bindings from [exist]:
+           * we can remove binding [x =/= t] from disequality if [x === t] in current substitution.
+           * The disequality becomes violated once the [exist] becomes empty.
+           * In the case of violation we will also have a substitution [univ]
+           * for universally quantified variables.
+           * This substitution can be seen as a counterexample for disequality `forall (x) (u =/= t)`
+           *)
+          { exist : Term.t VarMap.t
+          ; univ  : Term.t VarMap.t
+          }
 
-        let update t =
-          ListLabels.fold_left ~init:t
-            ~f:(let open Binding in fun acc {var; term} ->
-              if VarMap.mem var acc then
-                (* in this case we have subformula of the form (x =/= t1) \/ (x =/= t2) which is always SAT *)
-                raise Disequality_fulfilled
-              else
-                VarMap.add var term acc
+        (* [extend env t bs] - extends the disjunct [t] by the list of
+         *   bindings [bs] (arbitrary quantified)
+         *)
+        let extend env t bs =
+          (* helper function for updating of a var-to-term mapping *)
+          let upd var term map =
+            if VarMap.mem var map then
+              (* in this case we have subformula of the form (x =/= t1) \/ (x =/= t2) which is always SAT *)
+              raise Disequality_fulfilled
+            else
+              VarMap.add var term map
+          in
+          (* (Printf.printf "length %d\n" @@ List.length bs; *)
+          let ({exist; univ } as t) = ListLabels.fold_left bs ~init:t
+            ~f:(let open Binding in fun {exist; univ} {var; term} ->
+              (* Printf.printf "HERE!!!\n%!"; *)
+              match Env.quantifier env var with
+              | Univ  -> { exist; univ  = upd var term univ ; }
+              | Exist ->
+                match Env.var env term with
+                | None    -> { univ ; exist = upd var term exist; }
+                | Some u  ->
+                  match Env.quantifier env u with
+                  | Univ  -> { exist; univ  = upd u !!!var univ ; }
+                  | Exist -> { univ ; exist = upd var term exist; }
             )
+          in
+          if VarMap.is_empty exist then raise Disequality_violated else t
 
-        let make bs =
-          if bs = [] then raise Disequality_violated else ();
-          update VarMap.empty bs
+        let make env = extend env { exist = VarMap.empty; univ = VarMap.empty }
 
-        let samplevar t = fst @@ VarMap.min_binding t
+        let samplevar {exist} = fst @@ VarMap.min_binding exist
 
         type status =
           | Fulfiled
@@ -1077,51 +1207,68 @@ module Disequality :
           | Some ([], _)      -> Violated
           | Some (prefix, _)  -> Refined prefix
 
-        let rec recheck env subst t =
-          let var, term = VarMap.min_binding t in
-          let unchecked = VarMap.remove var t in
-          match refine env subst !!!var term with
-          | Fulfiled       -> raise Disequality_fulfilled
-          | Refined delta  -> update unchecked delta
-          | Violated       ->
-            if VarMap.is_empty unchecked then
-              raise Disequality_violated
-            else
-              recheck env subst unchecked
+        let rec recheck env subst { exist; univ } =
+          if VarMap.is_empty exist then raise Disequality_violated else ();
+          match Subst.merge env subst (Subst.of_map univ) with
+          | None              -> raise Disequality_fulfilled
+          | Some (_, subst)   ->
+            let var, term = VarMap.min_binding exist in
+            let exist = VarMap.remove var exist in
+            match refine env subst !!!var term with
+            | Fulfiled       -> raise Disequality_fulfilled
+            | Violated       -> recheck env subst { exist; univ }
+            | Refined delta  ->
+              if List.exists (Binding.is_exist_quant env) delta then
+                extend env { exist; univ } delta
+              else (
+                (* in this case we haven't obtained new bindings
+                 * for existentially quantified variables,
+                 * thus we have to check other bindings in disequality
+                 *)
+                (* Printf.printf "THERE!!!\n%!"; *)
+                recheck env subst @@ extend env { exist; univ } delta
+              )
 
         let of_diseq env subst x y =
           match refine env subst x y with
-          | Refined delta -> make delta
+          | Refined delta -> make env delta
           | Fulfiled      -> raise Disequality_fulfilled
           | Violated      -> raise Disequality_violated
 
-        let of_list env subst lst =
-          recheck env subst @@ make lst
+        let of_list env subst bs =
+          recheck env subst @@ make env bs
 
-        let reify env subst ds =
-          let result = VarMap.fold (fun var term acc ->
-            match acc with
-            | None    -> None
-            | Some bs ->
-              match refine env subst !!!var term with
-              | Fulfiled       -> None
-              | Violated       -> acc
-              | Refined delta  -> Some (delta @ bs)
-          ) ds (Some [])
-          in
-          (* We should not get empty substituion delta here,
-           * because it would mean that disequality is violated.
-           * But we had to detect violations during search via `check`.
-           *)
-          assert (match result with Some [] -> false | _ -> true);
-          result
+        let reify env subst { exist; univ } =
+          (* match Subst.merge env subst (Subst.of_map univ) with *)
+          (* we shouldn't get here, because it would mean that disequality is fulfilled.
+           * But we had to detect it during search *)
+          (* | None              -> assert false *)
+          (* | Some (_, subst)   -> *)
+            let result = VarMap.fold (fun var term acc ->
+              match acc with
+              | None    -> None
+              | Some bs ->
+                match refine env subst !!!var term with
+                | Fulfiled       -> None
+                | Violated       -> acc
+                | Refined delta  ->
+                  let delta, _ = Binding.partition env delta in
+                  Some (delta @ bs)
+            ) exist (Some [])
+            in
+            (* We should not get empty substituion delta here,
+             * because it would mean that disequality is violated.
+             * But we had to detect violations during search via `check`.
+             *)
+            assert (match result with Some [] -> false | _ -> true);
+            result
 
-        let witness env subst ds =
-          match reify env subst ds with
+        let witness env subst t =
+          match reify env subst t with
           | Some ds -> Some (Subst.of_list ds)
           | None    -> None
 
-        let is_relevant env subst t fv =
+        let is_relevant env subst {exist} fv =
           (* left those disjuncts that contains binding only for variables from [fv],
            * otherwise it's possible to pick binding (x =/= t) from disjunct for
            * variable [x] that is not in [fv],
@@ -1130,15 +1277,15 @@ module Disequality :
            VarMap.for_all (fun var term ->
              (VarSet.mem var fv) ||
              (match Env.var env term with Some u -> VarSet.mem u fv | None -> false)
-           ) t
+           ) exist
 
-        let freevars env subst t =
+        let freevars env subst {exist} =
           VarMap.fold (fun _ term acc ->
             VarSet.union acc @@ Subst.freevars env subst term
-          ) t VarSet.empty
+          ) exist VarSet.empty
 
-        let subsumed env subst t t' =
-          Subst.(subsumed env (of_map t') (of_map t))
+        let subsumed env subst {exist} {exist=exist'} =
+          Subst.(subsumed env (of_map exist') (of_map exist))
 
       end
 
@@ -1449,8 +1596,8 @@ module State :
 
     val new_scope : t -> t
 
-    val enter_strat : t -> t
-    val leave_strat : t -> t
+    val enter_strata : t -> t
+    val leave_strata : t -> t
 
     val unify : 'a -> 'a -> t -> t option
     val diseq : 'a -> 'a -> t -> t option
@@ -1484,11 +1631,14 @@ module State :
 
     let new_scope st = {st with scope = Var.new_scope ()}
 
-    let enter_strat st =
+    let enter_strata st =
+      Env.enter_strata st.env;
       (* TODO: probably, we should disable set-var-val optimisation inside negation *)
       new_scope st
 
-    let leave_strat st = st
+    let leave_strata st =
+      Env.leave_strata st.env;
+      st
 
     let unify x y ({env; subst; ctrs; scope} as st) =
         match Subst.unify ~scope env subst x y with
@@ -1607,11 +1757,12 @@ let (?~) g st =
     List.map (fun st -> State.complement st cex) sts
     |> List.concat
   in
-  let st = State.enter_strat st in
+  let st = State.enter_strata st in
   let cexs = g st in
+  let st = State.leave_strata st in
   try
     Stream.fold complement [st] cexs |>
-    List.map State.leave_strat |>
+    (* List.map State.leave_strata |> *)
     Stream.of_list
   with Empty_stream -> Stream.nil
 

@@ -46,9 +46,14 @@ let _ =
   (* runNat       (-1) q qh (REPR (fun q -> (fresh (n) (n === nat 3) ?~(peano n)))); *)
 
   (* test contradiction *)
-  runInt       (-1) q qh (REPR (fun q -> ?~((q === !1) ||| (q =/= !1))))
+  runInt       (-1) q qh (REPR (fun q -> ?~((q === !1) ||| (q =/= !1))));
 
   (* test `fresh` under negation *)
+
+  runIList     (-1) q qh (REPR (fun q -> ?~(fresh (x) (q === !![x]))));
+  (* the following two tests must fail *)
+  runIList     (-1) q qh (REPR (fun q -> ?~(fresh (x) (q === !![x])) &&& (fresh (y) (q === !![y]))));
+  runIList     (-1) q qh (REPR (fun q -> (fresh (y) (q === !![y])) &&& ?~(fresh (x) (q === !![x]))));
 
   (* these goals must fail because there is [x] such that [x === 1] (or [x === 1 \/ x === 2]) *)
   (* runInt       (-1) q qh (REPR (fun q -> ?~(fresh (x) (x === !1))));
