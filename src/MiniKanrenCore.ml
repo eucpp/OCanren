@@ -1195,7 +1195,9 @@ module Disequality :
 
         val subsumed : Env.t -> Subst.t -> t -> t -> bool
 
-        val reify : Env.t -> Subst.t -> t -> Binding.t list option
+        val simplify : Env.t -> Subst.t -> t -> t option
+
+        val reify : Env.t -> Subst.t -> t -> Binding.t list
       end =
       struct
         type t =
@@ -1242,7 +1244,7 @@ module Disequality :
 
         let make env = extend env { exist = VarMap.empty; univ = VarMap.empty }
 
-        let samplevar {exist} = fst @@ VarMap.min_binding exist
+        let samplevar {exist} = fst @@ VarMap.max_binding exist
 
         type status =
           | Fulfiled
@@ -1260,7 +1262,7 @@ module Disequality :
           match Subst.merge env subst (Subst.of_map univ) with
           | None              -> raise Disequality_fulfilled
           | Some (_, subst)   ->
-            let var, term = VarMap.min_binding exist in
+            let var, term = VarMap.max_binding exist in
             let exist = VarMap.remove var exist in
             match refine env subst !!!var term with
             | Fulfiled       -> raise Disequality_fulfilled
@@ -1286,32 +1288,38 @@ module Disequality :
           recheck env subst @@ make env bs
 
         let reify env subst { exist; univ } =
+          let helper t xs = VarMap.fold (fun var term xs -> Binding.({var; term})::xs) t xs in
+          helper exist @@ helper univ []
+
+        let simplify' env subst { exist; univ } =
           match Subst.merge env subst (Subst.of_map univ) with
           (* we shouldn't get here, because it would mean that disequality is fulfilled.
            * But we had to detect it during search *)
           | None              -> assert false
           | Some (_, subst)   ->
-            let result = VarMap.fold (fun var term acc ->
-              match acc with
-              | None    -> None
-              | Some bs ->
+            try
+              let result = VarMap.fold (fun var term acc ->
                 match refine env subst !!!var term with
-                | Fulfiled       -> None
+                | Fulfiled       -> raise Disequality_fulfilled
                 | Violated       -> acc
-                | Refined delta  ->
-                  (* let delta, _ = Binding.partition env delta in *)
-                  Some (delta @ bs)
-            ) exist (Some [])
-            in
-            (* We should not get empty substituion delta here,
-             * because it would mean that disequality is violated.
-             * But we had to detect violations during search via `check`.
-             *)
-            assert (match result with Some [] -> false | _ -> true);
-            result
+                | Refined delta  -> delta @ acc
+              ) exist []
+              in
+              (* We should not get empty substituion delta here,
+               * because it would mean that disequality is violated.
+               * But we had to detect violations during search via `check`.
+               *)
+              assert (match result with [] -> false | _ -> true);
+              Some result
+            with Disequality_fulfilled -> None
+
+        let simplify env subst t =
+          match simplify' env subst t with
+          | None    -> None
+          | Some ds -> Some (of_list env subst ds)
 
         let witness env subst t =
-          match reify env subst t with
+          match simplify' env subst t with
           | None    -> None
           | Some ds ->
             ListLabels.fold_left ds ~init:(Some Subst.empty)
@@ -1471,6 +1479,12 @@ module Disequality :
           remove_subsumed env subst @@ helper fv
 
         let reify env subst t x =
+          let t = M.fold (fun id disj acc ->
+            match Disjunct.simplify env subst disj with
+            | Some disj -> M.add id disj acc
+            | None      -> acc
+          ) t M.empty
+          in
           let fv = Subst.freevars env subst x in
           let t = project env subst t fv in
           (* here we convert disequality in CNF form into DNF form;
@@ -1478,14 +1492,12 @@ module Disequality :
            * list of disequality terms (without duplicates) for each variable
            *)
           M.fold (fun _ disj acc ->
-            match Disjunct.reify env subst disj with
-            | None    -> acc
-            | Some bs ->
+            let bs = Disjunct.reify env subst disj in
               (* for each answer we append every atom in disjunct to it,
                * obtaining a list of new `extended` answers;
                * then we `concat` these lists into single list
                *)
-              ListLabels.map acc ~f:(fun answ ->
+            ListLabels.map acc ~f:(fun answ ->
                 let open Binding in
                 (* it might be the case that some atom in the disjunct
                  * is a duplicate of some other disequality in the answer;
