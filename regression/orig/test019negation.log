@@ -1,0 +1,102 @@
+fun q -> (?~) ((===) q !1), all answers {
+q=_.10 [=/= 1];
+}
+fun q -> (?~) ((=/=) q !1), all answers {
+q=1;
+}
+fun q -> (&&&) ((===) q !1) ((?~) ((===) q !2)), all answers {
+q=1;
+}
+fun q -> (&&&) ((=/=) q !1) ((?~) ((=/=) q !2)), all answers {
+q=2;
+}
+fun q -> (?~) ((|||) ((===) q !1) ((=/=) q !1)), all answers {
+}
+fun q ->
+  MiniKanren.Fresh.two
+    (fun x y ->
+       delay
+         (fun () ->
+            conj ((|||) ((=/=) x !1) ((=/=) y !2)) ((===) q ((!!) [x; y])))), all answers {
+q=[_.11 [=/= 1]; _.12];
+q=[_.11; _.12 [=/= 2]];
+}
+fun q ->
+  MiniKanren.Fresh.two
+    (fun x y ->
+       delay
+         (fun () ->
+            conj ((?~) ((&&&) ((===) x !1) ((===) y !2)))
+              ((===) q ((!!) [x; y])))), all answers {
+q=[_.11; _.12 [=/= 2]];
+q=[_.11 [=/= 1]; _.12];
+}
+fun q ->
+  MiniKanren.Fresh.two
+    (fun x y ->
+       delay
+         (fun () ->
+            conj ((&&&) ((=/=) x !1) ((=/=) y !2)) ((===) q ((!!) [x; y])))), all answers {
+q=[_.11 [=/= 1]; _.12 [=/= 2]];
+}
+fun q ->
+  MiniKanren.Fresh.two
+    (fun x y ->
+       delay
+         (fun () ->
+            conj ((?~) ((|||) ((===) x !1) ((===) y !2)))
+              ((===) q ((!!) [x; y])))), all answers {
+q=[_.11 [=/= 1]; _.12 [=/= 2]];
+}
+fun q ->
+  MiniKanren.Fresh.one (fun x -> delay (fun () -> (=/=) q ((!!) [!1; x; !2]))), all answers {
+q=_.10 [=/= [1; _.11; 2]];
+}
+fun q ->
+  MiniKanren.Fresh.one
+    (fun x -> delay (fun () -> (?~) ((===) q ((!!) [!1; x; !2])))), all answers {
+q=_.10 [=/= [1; _.11; 2]];
+}
+fun q ->
+  (?~) (MiniKanren.Fresh.one (fun x -> delay (fun () -> (===) q ((!!) [x])))), all answers {
+q=_.10 [=/= [_.11]];
+}
+fun q ->
+  (?~) (MiniKanren.Fresh.one (fun x -> delay (fun () -> (=/=) q ((!!) [x])))), all answers {
+q=[_.11];
+}
+fun q ->
+  (&&&)
+    ((?~)
+       (MiniKanren.Fresh.one (fun x -> delay (fun () -> (===) q ((!!) [x])))))
+    (MiniKanren.Fresh.one (fun y -> delay (fun () -> (===) q ((!!) [y])))), all answers {
+}
+fun q ->
+  (&&&) (MiniKanren.Fresh.one (fun y -> delay (fun () -> (===) q ((!!) [y]))))
+    ((?~)
+       (MiniKanren.Fresh.one (fun x -> delay (fun () -> (===) q ((!!) [x]))))), all answers {
+}
+fun q -> (?~) (MiniKanren.Fresh.one (fun x -> delay (fun () -> (===) x !1))), all answers {
+}
+fun q ->
+  (&&&) ((===) q !1)
+    ((?~) (MiniKanren.Fresh.one (fun x -> delay (fun () -> (===) x q)))), all answers {
+}
+fun q -> (?~) (MiniKanren.Fresh.one (fun x -> delay (fun () -> (===) x q))), all answers {
+}
+fun q ->
+  (?~)
+    (MiniKanren.Fresh.one
+       (fun x -> delay (fun () -> (|||) ((===) x !1) ((===) x !2)))), all answers {
+}
+fun q r ->
+  (&&&) ((&&&) ((===) q !1) ((===) r !2))
+    ((?~)
+       (MiniKanren.Fresh.one
+          (fun x -> delay (fun () -> (|||) ((===) x q) ((===) x r))))), all answers {
+}
+fun q r ->
+  (?~)
+    (MiniKanren.Fresh.one
+       (fun x -> delay (fun () -> (|||) ((===) x q) ((===) x r)))), all answers {
+}

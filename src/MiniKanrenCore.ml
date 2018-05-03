@@ -253,7 +253,7 @@ module Var =
     type scope  = int
     type anchor = int list
 
-    type quantifier = Exist | Univ
+    type quantifier = Exist | Univ | Free
 
     let tabling_env = -1
 
@@ -335,6 +335,8 @@ module Term :
     (* [var x] if [x] is logic variable returns it, otherwise returns [None] *)
     val var : 'a -> Var.t option
 
+    val is_boxed : 'a -> bool
+
     (* [map ~fvar ~fval x] map over OCaml's value extended with logic variables;
      *   handles primitive types with the help of [fval] and logic variables with the help of [fvar]
      *)
@@ -392,6 +394,9 @@ module Term :
          (t >= Obj.first_non_constant_constructor_tag)
       then true
       else false
+
+    let is_boxed x =
+      is_box @@ Obj.tag @@ Obj.repr x
 
     let is_int = (=) Obj.int_tag
     let is_str = (=) Obj.string_tag
@@ -583,7 +588,7 @@ module Env :
     val is_var        : t -> 'a -> bool
     val var           : t -> 'a -> Var.t option
 
-    val quantifier    : t -> Var.t -> Var.quantifier
+    val quant         : t -> Var.t -> Var.quantifier
 
     val freevars      : t -> 'a -> VarSet.t
     val is_open       : t -> 'a -> bool
@@ -652,7 +657,7 @@ module Env :
 
     let is_var env x = (var env x) <> None
 
-    let quantifier env x =
+    let quant env x =
       let rec helper i s =
         if s = env.strata then
           if (i mod 2) = 0 then
@@ -665,11 +670,11 @@ module Env :
         let s' = parent_strata env.stratord s in
         if s = s' then
           ((*Printf.printf "var %d is exist. quant.\n" x.Var.index;*)
-          Var.Exist)
+          Var.Free)
         else
           helper (i+1) s'
       in
-      helper 0 x.Var.strata
+      if x.Var.strata = env.strata then Var.Free else helper 0 x.Var.strata
         (* if s = env.strata then i else helper (i+1) @@ parent_strata env.stratord s
       in
       (* Printf.printf "var  strata %d; env strata %d\n%!" x.Var.strata env.strata; *)
@@ -728,11 +733,11 @@ module Binding :
       (match Env.var env term with Some v -> VarSet.mem v vs | None -> false)
 
     let is_exist_quant env {var; term} =
-      match Env.quantifier env var with
+      match Env.quant env var with
       | Var.Univ  -> false
-      | Var.Exist ->
+      | Var.Exist | Var.Free ->
         match Env.var env term with
-        | Some v -> Env.quantifier env v = Var.Exist
+        | Some v -> Env.quant env v <> Var.Univ
         | None   -> true
 
     let is_univ_quant env b = not @@ is_exist_quant env b
@@ -784,7 +789,7 @@ module Subst :
      *)
     val unify : ?subsume:bool -> ?scope:Var.scope -> Env.t -> t -> 'a -> 'a -> (Binding.t list * t) option
 
-    (* val qunify : Env.t -> t -> 'a -> 'a -> (Binding.t list * t) option *)
+    val qunify : Env.t -> t -> 'a -> 'a -> (Binding.t list * t) option
 
     val diff : Env.t -> t -> t -> t
 
@@ -930,6 +935,68 @@ module Subst :
               then raise Unification_failed
               else match walk env subst v with
               | Var v    -> extend v y acc
+              | Value x  -> helper x y acc
+          )
+      in
+      try
+        let x, y = Term.(repr x, repr y) in
+        Some (helper x y ([], subst))
+      with Term.Different_shape _ | Unification_failed | Occurs_check -> None
+
+    let rec univ_check env subst term =
+      iter env subst term
+        ~fvar:(fun v -> if Env.quant env v = Var.Univ then raise Unification_failed)
+        ~fval:(fun x -> ())
+
+    let qunify env subst x y =
+      (* The idea is to do the unification and collect the unification prefix during the process *)
+      let extend var term (prefix, subst) =
+        let subst = extend ~scope:Var.non_local_scope env subst var term in
+        (Binding.({var; term})::prefix, subst)
+      in
+      let rec helper x y acc =
+        let extendvar v u acc =
+          if Var.equal v u then acc else extend v (Term.repr u) acc
+        in
+        let extendvarval v t ((_, subst) as acc) =
+          match Env.quant env v with
+          | Univ  -> raise Unification_failed
+          | Exist -> extend v t acc
+          | Free  ->
+            univ_check env subst t;
+            if Term.is_boxed t then begin
+              (* TODO: make it safer *)
+              let t' = Obj.dup t in
+              let s = Obj.size t' in
+              for i = 0 to s - 1 do
+                Obj.set_field t' i @@ Env.fresh ~scope:Var.non_local_scope env
+              done;
+              helper t t' @@ extend v t' acc
+              end
+            else
+              extend v t acc
+        in
+        let open Term in
+        fold2 x y ~init:acc
+          ~fvar:(fun ((_, subst) as acc) x y ->
+            match walk env subst x, walk env subst y with
+            | Var x, Var y      ->
+              begin match Env.quant env x, Env.quant env y with
+              | Univ, Univ -> raise Unification_failed
+              | Exist, _   -> extendvar x y acc
+              | _, Exist   -> extendvar y x acc
+              | _, _       -> extendvar x y acc
+              end
+            | Var x, Value y    -> extendvarval x y acc
+            | Value x, Var y    -> extendvarval y x acc
+            | Value x, Value y  -> helper x y acc
+          )
+          ~fval:(fun acc x y ->
+              if x = y then acc else raise Unification_failed
+          )
+          ~fk:(fun ((_, subst) as acc) l v y ->
+              match walk env subst v with
+              | Var v    -> extendvarval v y acc
               | Value x  -> helper x y acc
           )
       in
@@ -1167,15 +1234,15 @@ module Disequality :
           let ({exist; univ } as t) = ListLabels.fold_left bs ~init:t
             ~f:(let open Binding in fun {exist; univ} {var; term} ->
               (* Printf.printf "HERE!!!\n%!"; *)
-              match Env.quantifier env var with
+              match Env.quant env var with
               | Univ  -> { exist; univ  = upd var term univ ; }
-              | Exist ->
+              | Exist | Free ->
                 match Env.var env term with
                 | None    -> { univ ; exist = upd var term exist; }
                 | Some u  ->
-                  match Env.quantifier env u with
+                  match Env.quant env u with
                   | Univ  -> { exist; univ  = upd u !!!var univ ; }
-                  | Exist -> { univ ; exist = upd var term exist; }
+                  | Exist | Free -> { univ ; exist = upd var term exist; }
             )
           in
           if VarMap.is_empty exist then raise Disequality_violated else t
