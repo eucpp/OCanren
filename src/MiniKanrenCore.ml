@@ -784,6 +784,8 @@ module Subst :
      *)
     val unify : ?subsume:bool -> ?scope:Var.scope -> Env.t -> t -> 'a -> 'a -> (Binding.t list * t) option
 
+    (* val qunify : Env.t -> t -> 'a -> 'a -> (Binding.t list * t) option *)
+
     val diff : Env.t -> t -> t -> t
 
     val merge_disjoint : Env.t -> t -> t -> t
@@ -1211,7 +1213,6 @@ module Disequality :
                  * for existentially quantified variables,
                  * thus we have to check other bindings in disequality
                  *)
-                (* Printf.printf "THERE!!!\n%!"; *)
                 recheck env subst @@ extend env { exist; univ } delta
               )
 
@@ -1225,11 +1226,11 @@ module Disequality :
           recheck env subst @@ make env bs
 
         let reify env subst { exist; univ } =
-          (* match Subst.merge env subst (Subst.of_map univ) with *)
+          match Subst.merge env subst (Subst.of_map univ) with
           (* we shouldn't get here, because it would mean that disequality is fulfilled.
            * But we had to detect it during search *)
-          (* | None              -> assert false *)
-          (* | Some (_, subst)   -> *)
+          | None              -> assert false
+          | Some (_, subst)   ->
             let result = VarMap.fold (fun var term acc ->
               match acc with
               | None    -> None
