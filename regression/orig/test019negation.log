@@ -62,9 +62,6 @@ fun q ->
 q=_.10 [=/= [_.11]];
 }
 fun q ->
-  (?~) (MiniKanren.Fresh.one (fun x -> delay (fun () -> (=/=) q ((!!) [x])))), all answers {
-}
-fun q ->
   (&&&)
     ((?~)
        (MiniKanren.Fresh.one (fun x -> delay (fun () -> (===) q ((!!) [x])))))
@@ -98,4 +95,14 @@ fun q r ->
   (?~)
     (MiniKanren.Fresh.one
        (fun x -> delay (fun () -> (|||) ((===) x q) ((===) x r)))), all answers {
+}
+fun q -> (?~) (MiniKanren.Fresh.one (fun x -> delay (fun () -> (=/=) x q))), all answers {
+}
+fun q r ->
+  (?~)
+    (MiniKanren.Fresh.one
+       (fun x -> delay (fun () -> (|||) ((=/=) x q) ((=/=) x r)))), all answers {
+}
+fun q ->
+  (?~) (MiniKanren.Fresh.one (fun x -> delay (fun () -> (=/=) q ((!!) [x])))), all answers {
 }

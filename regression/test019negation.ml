@@ -47,9 +47,8 @@ let _ =
   (* test that negation of infinite goals is able to terminate if arguments are ground enough *)
   (* runNat       (-1) q qh (REPR (fun q -> (fresh (n) (n === nat 3) ?~(peano n)))); *)
 
-  (* test `fresh` under negation *)
+  (* this test must succeed and derive constraint `forall (x). q =/= [x]`  *)
   runIList  (-1) q qh (REPR (fun q -> ?~(fresh (x) (q === !![x]))));
-  runIList  (-1) q qh (REPR (fun q -> ?~(fresh (x) (q =/= !![x]))));
 
   (* the following two tests must fail *)
   runIList  (-1) q qh (REPR (fun q -> ?~(fresh (x) (q === !![x])) &&& (fresh (y) (q === !![y]))));
@@ -65,21 +64,9 @@ let _ =
   runInt    (-1) qr qrh (REPR (fun q r -> (q === !1) &&& (r === !2) &&& ?~(fresh (x) ((x === q) ||| (x === r)))));
   runInt    (-1) qr qrh (REPR (fun q r -> ?~(fresh (x) ((x === q) ||| (x === r)))));
 
+  (* these goals also should fail because there is [x] such that [x =/= q] (or [x =/= q \/ x =/= r]) *)
+  runInt    (-1) q  qh  (REPR (fun q    -> ?~(fresh (x) (x =/= q))));
+  runInt    (-1) qr qrh (REPR (fun q r  -> ?~(fresh (x) ((x =/= q) ||| (x =/= r)))));
 
-
-  (* these goals must fail by the same reason *)
-  (* runInt       (-1) q  qh  (REPR (fun q   -> (q === !1) &&& ?~(fresh (x) (x === q))));
-  runInt       (-1) qr qrh (REPR (fun q r -> (q === !1) &&& (r === !2) &&& ?~(fresh (x) ((x === q) ||| (x === r)))));
-
-  (* these goals also should fail because there is [x] such that [x === q] (or [x === q \/ x === r]),
-     as far as [q] and [r] are fresh *)
-  runInt       (-1) q  qh  (REPR (fun q   -> ?~(fresh (x) (x === q))));
-  runInt       (-1) qr qrh (REPR (fun q r -> ?~(fresh (x) ((x === q) ||| (x === r)))));
-
-  (* these goals also should fail because there is [x] such that [x =/= q] (or [x =/= q \/ x =/= r]),
-     as far as [q] and [r] are fresh *)
-  runInt       (-1) q  qh  (REPR (fun q   -> ?~(fresh (x) (x =/= q))));
-  runInt       (-1) qr qrh (REPR (fun q r -> ?~(fresh (x) ((x =/= q) ||| (x =/= r)))));
-
-  (* these goal must derive constraint [q =/= [1; _.0]]  *)
-  runIList     (-1) q qh (REPR (fun q -> (fresh (x) ?~(fresh (x) (q === !![!1; x;]))))) *)
+  (* this test must fail because there is [x] such that [q =/= [x]] *)
+  runIList  (-1) q qh (REPR (fun q -> ?~(fresh (x) (q =/= !![x]))));

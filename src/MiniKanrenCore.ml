@@ -580,6 +580,8 @@ module Env :
     val enter_strata  : t -> unit
     val leave_strata  : t -> unit
 
+    val incr_strata : t -> t
+
     val check         : t -> Var.t -> bool
     val check_exn     : t -> Var.t -> unit
 
@@ -601,7 +603,7 @@ module Env :
       (* Counter for allocation of new variables *)
       ; mutable next_var : int
       (* Environment keeps number of current strata *)
-      ; mutable strata : int
+      ; strata : int
       (* Counter for allocation of new stratas *)
       ; mutable next_strata : int
       (* There is a partial order on all stratas.
@@ -634,11 +636,17 @@ module Env :
       let new_strata = 1 + env.next_strata in
       Hashtbl.add env.stratord new_strata env.strata;
       env.next_strata <- new_strata;
-      env.strata      <- new_strata;
+      (* env.strata      <- new_strata; *)
       ()
 
-    let leave_strata env =
-      env.strata <- parent_strata env.stratord env.strata
+    let leave_strata env = ()
+      (* env.strata <- parent_strata env.stratord env.strata *)
+
+    let incr_strata env =
+      let new_strata = 1 + env.next_strata in
+      Hashtbl.add env.stratord new_strata env.strata;
+      env.next_strata <- new_strata;
+      { env with strata = new_strata }
 
     let check env v = (v.Var.env = env.anchor)
 
@@ -660,31 +668,12 @@ module Env :
     let quant env x =
       let rec helper i s =
         if s = env.strata then
-          if (i mod 2) = 0 then
-            ((*Printf.printf "var %d is exist. quant.\n" x.Var.index;*)
-            Var.Exist)
-          else
-            ((*Printf.printf "var %d is univ. quant.\n" x.Var.index;*)
-            Var.Univ)
+          if (i mod 2) = 0 then Var.Exist else Var.Univ
         else
         let s' = parent_strata env.stratord s in
-        if s = s' then
-          ((*Printf.printf "var %d is exist. quant.\n" x.Var.index;*)
-          Var.Free)
-        else
-          helper (i+1) s'
+        if s = s' then Var.Free else helper (i+1) s'
       in
       if x.Var.strata = env.strata then Var.Free else helper 0 x.Var.strata
-        (* if s = env.strata then i else helper (i+1) @@ parent_strata env.stratord s
-      in
-      (* Printf.printf "var  strata %d; env strata %d\n%!" x.Var.strata env.strata; *)
-      let i = helper 0 x.Var.strata in
-      if (i mod 2) = 0 then
-        (Printf.printf "var %d is exist. quant.\n" x.Var.index;
-        Var.Exist)
-      else
-        (Printf.printf "var %d is univ. quant.\n" x.Var.index;
-        Var.Univ) *)
 
     let freevars env x =
       Term.fold (Term.repr x) ~init:VarSet.empty
@@ -718,6 +707,8 @@ module Binding :
 
     val partition : Env.t -> t list -> t list * t list
 
+    val show : t -> string
+
     val equal : t -> t -> bool
     val compare : t -> t -> int
     val hash : t -> int
@@ -743,6 +734,9 @@ module Binding :
     let is_univ_quant env b = not @@ is_exist_quant env b
 
     let partition env = List.partition (is_exist_quant env)
+
+    let show {var; term} =
+      Printf.sprintf "{%s -> %s}" (Term.show !!!var) (Term.show !!!term)
 
     let equal {var=v; term=t} {var=u; term=p} =
       (Var.equal v u) || (Term.equal t p)
@@ -982,10 +976,10 @@ module Subst :
             match walk env subst x, walk env subst y with
             | Var x, Var y      ->
               begin match Env.quant env x, Env.quant env y with
-              | Univ, Univ -> raise Unification_failed
-              | Exist, _   -> extendvar x y acc
-              | _, Exist   -> extendvar y x acc
-              | _, _       -> extendvar x y acc
+              | Univ, Univ | Univ, Free | Free, Univ -> raise Unification_failed
+              | Exist, _  -> extendvar x y acc
+              | _, Exist  -> extendvar y x acc
+              | _, _      -> extendvar x y acc
               end
             | Var x, Value y    -> extendvarval x y acc
             | Value x, Var y    -> extendvarval y x acc
@@ -1230,10 +1224,8 @@ module Disequality :
             else
               VarMap.add var term map
           in
-          (* (Printf.printf "length %d\n" @@ List.length bs; *)
           let ({exist; univ} as t) = ListLabels.fold_left bs ~init:t
             ~f:(let open Binding in fun {exist; univ} {var; term} ->
-              (* Printf.printf "HERE!!!\n%!"; *)
               match Env.quant env var with
               | Univ  -> { exist; univ  = upd var term univ ; }
               | Exist | Free ->
@@ -1306,7 +1298,7 @@ module Disequality :
                 | Fulfiled       -> None
                 | Violated       -> acc
                 | Refined delta  ->
-                  let delta, _ = Binding.partition env delta in
+                  (* let delta, _ = Binding.partition env delta in *)
                   Some (delta @ bs)
             ) exist (Some [])
             in
@@ -1567,7 +1559,7 @@ module Disequality :
       with Disequality_violated -> None
 
     let witness env subst cstore =
-       Conjunct.witness env subst @@ combine env subst cstore
+      Conjunct.witness env subst @@ combine env subst cstore
 
     let project env subst cstore fv =
       Conjunct.(split @@ project env subst (combine env subst cstore) fv)
@@ -1672,6 +1664,8 @@ module State :
     val enter_strata : t -> t
     val leave_strata : t -> t
 
+    val incr_strata : t -> t
+
     val unify : 'a -> 'a -> t -> t option
     val diseq : 'a -> 'a -> t -> t option
 
@@ -1712,6 +1706,9 @@ module State :
     let leave_strata st =
       Env.leave_strata st.env;
       st
+
+    let incr_strata st =
+      new_scope {st with env = Env.incr_strata st.env}
 
     let unify x y ({env; subst; ctrs; scope} as st) =
         match Subst.unify ~scope env subst x y with
@@ -1833,9 +1830,9 @@ let (?~) g st =
     List.map (fun st -> State.complement st cex) sts
     |> List.concat
   in
-  let st = State.enter_strata st in
-  let cexs = g st in
-  let st = State.leave_strata st in
+  (* let st = State.enter_strata st in *)
+  let cexs = g @@ State.incr_strata st in
+  (* let st = State.leave_strata st in *)
   try
     Stream.fold complement [st] cexs |>
     (* List.map State.leave_strata |> *)
@@ -2356,7 +2353,6 @@ module Table :
           if not (Cache.contains cache answ) then begin
             Cache.add cache answ;
             (* TODO: we only need to check diff, i.e. [subst' \ subst] *)
-            (* Printf.printf "subst': %s\n" (Term.(show @@ repr @@ Subst.split subst')); *)
             match Disequality.recheck env subst' ctrs (Subst.split subst') with
             | None      -> failure ()
             | Some ctrs ->
