@@ -63,7 +63,6 @@ q=_.10 [=/= [_.11]];
 }
 fun q ->
   (?~) (MiniKanren.Fresh.one (fun x -> delay (fun () -> (=/=) q ((!!) [x])))), all answers {
-q=[_.11];
 }
 fun q ->
   (&&&)

@@ -1231,7 +1231,7 @@ module Disequality :
               VarMap.add var term map
           in
           (* (Printf.printf "length %d\n" @@ List.length bs; *)
-          let ({exist; univ } as t) = ListLabels.fold_left bs ~init:t
+          let ({exist; univ} as t) = ListLabels.fold_left bs ~init:t
             ~f:(let open Binding in fun {exist; univ} {var; term} ->
               (* Printf.printf "HERE!!!\n%!"; *)
               match Env.quant env var with
@@ -1319,8 +1319,17 @@ module Disequality :
 
         let witness env subst t =
           match reify env subst t with
-          | Some ds -> Some (Subst.of_list ds)
           | None    -> None
+          | Some ds ->
+            ListLabels.fold_left ds ~init:(Some Subst.empty)
+              ~f:(let open Binding in fun acc {var; term} ->
+                match acc with
+                | None        -> None
+                | Some subst  ->
+                  match Subst.qunify env subst !!!var term with
+                  | None              -> None
+                  | Some (_, subst')  -> Some subst'
+              )
 
         let is_relevant env subst {exist} fv =
           (* left those disjuncts that contains binding only for variables from [fv],
