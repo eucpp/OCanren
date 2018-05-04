@@ -37,10 +37,10 @@ let _ =
   runIList  (-1) q qh (REPR (fun q -> (fresh (x y)   ((x =/= !1) &&& (y =/= !2)) (q === !![x; y]))));
   runIList  (-1) q qh (REPR (fun q -> (fresh (x y) ?~((x === !1) ||| (y === !2)) (q === !![x; y]))));
 
-  (* runIList     (-1) q qh (REPR (fun q -> (fresh (x y) (q === !![x; y]) (q =/= !![!1; !2]))));
-  runIList     (-1) q qh (REPR (fun q -> (fresh (x y) (q === !![x; y]) ?~((x === !1) &&& (y === !2))))); *)
-
   (* test lists (implicit conjunction) *)
+  runIList  (-1) q qh (REPR (fun q -> (fresh (x y) ((q === !![x; y]) &&& ?~(!![x; y] === !![!1; !2])))));
+  runIList  (-1) q qh (REPR (fun q -> (fresh (x y) ((q === !![x; y]) &&& ?~(!![x; y] =/= !![!1; !2])))));
+
   runIList  (-1) q qh (REPR (fun q -> (fresh (x)   (q =/= !![!1; x; !2]))));
   runIList  (-1) q qh (REPR (fun q -> (fresh (x) ?~(q === !![!1; x; !2]))));
 
@@ -55,12 +55,12 @@ let _ =
   runIList  (-1) q qh (REPR (fun q -> (fresh (y) (q === !![y])) &&& ?~(fresh (x) (q === !![x]))));
 
   (* this tests must fail because there is [x] such that [x === 1] (or [x === q]) *)
-  runInt    (-1) q qh  (REPR (fun q -> ?~(fresh (x) (x === !1))));
-  runInt    (-1) q  qh (REPR (fun q   -> (q === !1) &&& ?~(fresh (x) (x === q))));
-  runInt    (-1) q  qh (REPR (fun q   -> ?~(fresh (x) (x === q))));
+  runInt    (-1) q  qh (REPR (fun q -> ?~(fresh (x) (x === !1))));
+  runInt    (-1) q  qh (REPR (fun q -> (q === !1) &&& ?~(fresh (x) (x === q))));
+  runInt    (-1) q  qh (REPR (fun q -> ?~(fresh (x) (x === q))));
 
   (* this tests must fail because there is [x] such that [x === 1 \/ x === 2] (or [x === q \/ x === r]) *)
-  runInt    (-1) q  qh  (REPR (fun q -> ?~(fresh (x) ((x === !1) ||| (x === !2)))));
+  runInt    (-1) q  qh  (REPR (fun q   -> ?~(fresh (x) ((x === !1) ||| (x === !2)))));
   runInt    (-1) qr qrh (REPR (fun q r -> (q === !1) &&& (r === !2) &&& ?~(fresh (x) ((x === q) ||| (x === r)))));
   runInt    (-1) qr qrh (REPR (fun q r -> ?~(fresh (x) ((x === q) ||| (x === r)))));
 
@@ -70,3 +70,21 @@ let _ =
 
   (* this test must fail because there is [x] such that [q =/= [x]] *)
   runIList  (-1) q qh (REPR (fun q -> ?~(fresh (x) (q =/= !![x]))));
+
+  (* this test must derive constraint [q =/= r] *)
+  runInt    (-1) qr qrh (REPR (fun q r -> ?~(fresh (x) ((x === q) &&& (x === r)))));
+
+  (* this test must fail because there is [x] such that [x =/= q /\ x =/= r] *)
+  runInt    (-1) qr qrh (REPR (fun q r -> ?~(fresh (x) ((x =/= q) &&& (x =/= r)))));
+
+  (* this test is equal to `forall (x). exist (y) (x === y)` and should succeed *)
+  runIList  (-1) q qh (REPR (fun q -> ?~(fresh (x) ?~(fresh (y) (x === y)))));
+
+  (* this test is equal to `forall (x). exist (y) (x =/= y)` and should succeed *)
+  runIList  (-1) q qh (REPR (fun q -> ?~(fresh (x) ?~(fresh (y) (x =/= y)))));
+
+  (* this test is equal to `forall (x). exist (y) (q === y)` and should succeed *)
+  runIList  (-1) q qh (REPR (fun q -> ?~(fresh (x) ?~(fresh (y) (q === y)))));
+
+  (* this test is equal to `forall (x). exist (y) (q =/= y)` and should succeed *)
+  runIList  (-1) q qh (REPR (fun q -> ?~(fresh (x) ?~(fresh (y) (q =/= y)))));
