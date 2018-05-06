@@ -905,6 +905,7 @@ module Subst :
     exception Unification_failed
 
     let unify ?(subsume=false) ?(scope=Var.non_local_scope) env subst x y =
+      (* Printf.printf "%s === %s\n" (Term.show !!!x) (Term.show !!!y); *)
       (* The idea is to do the unification and collect the unification prefix during the process *)
       let extend var term (prefix, subst) =
         let subst = extend ~scope env subst var term in
@@ -1826,9 +1827,8 @@ exception Empty_stream
 
 let (?~) g st =
   let complement sts cex =
-    if List.length sts = 0 then raise Empty_stream else ();
-    List.map (fun st -> State.complement st cex) sts
-    |> List.concat
+    let res = List.map (fun st -> State.complement st cex) sts |> List.concat in
+    if List.length res = 0 then raise Empty_stream else res;
   in
   (* let st = State.enter_strata st in *)
   let cexs = g @@ State.incr_strata st in

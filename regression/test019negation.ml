@@ -11,14 +11,6 @@ let show_intl_llist = GT.(show List.logic @@ show logic @@ show int)
 
 let runInt n = runR MiniKanren.reify GT.(show int) GT.(show logic @@ show int) n
 let runIList n = runR (List.reify MiniKanren.reify) show_int_list show_intl_llist n
-let runNat n = runR (Nat.reify) (fun n -> string_of_int @@ Nat.to_int n) (GT.show(Nat.logic)) n
-
-let peano n =
-  let rec peano' n x = conde [
-    (n === x);
-    (delay (fun () -> peano' n (Nat.succ x)));
-  ] in
-  peano' n Nat.zero
 
 let _ =
   (* test simple cases *)
@@ -43,9 +35,6 @@ let _ =
 
   runIList  (-1) q qh (REPR (fun q -> (fresh (x)   (q =/= !![!1; x; !2]))));
   runIList  (-1) q qh (REPR (fun q -> (fresh (x) ?~(q === !![!1; x; !2]))));
-
-  (* test that negation of infinite goals is able to terminate if arguments are ground enough *)
-  (* runNat       (-1) q qh (REPR (fun q -> (fresh (n) (n === nat 3) ?~(peano n)))); *)
 
   (* this test must succeed and derive constraint `forall (x). q =/= [x]`  *)
   runIList  (-1) q qh (REPR (fun q -> ?~(fresh (x) (q === !![x]))));
@@ -87,4 +76,18 @@ let _ =
   runIList  (-1) q qh (REPR (fun q -> ?~(fresh (x) ?~(fresh (y) (q === y)))));
 
   (* this test is equal to `forall (x). exist (y) (q =/= y)` and should succeed *)
-  runIList  (-1) q qh (REPR (fun q -> ?~(fresh (x) ?~(fresh (y) (q =/= y)))));
+  runIList  (-1) q qh (REPR (fun q -> ?~(fresh (x) ?~(fresh (y) (q =/= y)))))
+
+
+let runNat n = runR (Nat.reify) (fun n -> string_of_int @@ Nat.to_int n) (GT.show(Nat.logic)) n
+
+let peano n =
+  let rec peano' n x = conde [
+    (n === x);
+    (delay (fun () -> peano' n (Nat.succ x)));
+  ] in
+  peano' n Nat.zero
+
+let _ =
+  (* test that negation of infinite goals is able to terminate if arguments are ground enough *)
+  runNat    (-1) q qh (REPR (fun q -> (fresh (n) (n === nat 3) ?~(peano n))))

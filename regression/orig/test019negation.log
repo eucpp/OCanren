@@ -180,3 +180,7 @@ fun q ->
                     (fun y -> delay (fun () -> (=/=) q y)))))), all answers {
 q=_.10;
 }
+fun q ->
+  MiniKanren.Fresh.one
+    (fun n -> delay (fun () -> conj ((===) n (nat 3)) ((?~) (peano n)))), all answers {
+}
