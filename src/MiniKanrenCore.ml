@@ -1855,9 +1855,39 @@ let call_fresh f st =
   let x = State.fresh st in
   f x st
 
+let call_eigen f =
+  ?~(call_fresh (fun x -> ?~(f x)))
+
 module Fresh =
   struct
     let succ prev f = call_fresh (fun x -> prev (f x))
+
+    let zero  f = f
+    let one   f = succ zero f
+    let two   f = succ one f
+
+    (* N.B. Manual inlining of numerals will speed-up OCanren a bit (mainly because of less memory consumption) *)
+    (* let two   g = fun st ->
+      let scope = State.scope st in
+      let env = State.env st in
+      let q = Env.fresh ~scope env in
+      let r = Env.fresh ~scope env in
+      g q r st *)
+
+    let three f = succ two f
+    let four  f = succ three f
+    let five  f = succ four f
+
+    let q     = one
+    let qr    = two
+    let qrs   = three
+    let qrst  = four
+    let pqrst = five
+  end
+
+module Eigen =
+  struct
+    let succ prev f = call_eigen (fun x -> prev (f x))
 
     let zero  f = f
     let one   f = succ zero f

@@ -137,6 +137,8 @@ val prj : ('a, 'b) injected -> 'a
     parameter *)
 val call_fresh : (('a, 'b) injected -> goal) -> goal
 
+val call_eigen : (('a, 'b) injected -> goal) -> goal
+
 (** [x === y] creates a goal, which performs a unification of [x] and [y] *)
 val (===) : ('a, 'b logic) injected -> ('a, 'b logic) injected -> goal
 
@@ -184,7 +186,33 @@ module Fresh :
     (** [succ num f] increments the number of free logic variables in
         a goal; can be used to get rid of ``fresh'' syntax extension
     *)
-    val succ : ('a -> 'b goal') -> ((_, _) injected -> 'a) -> 'b goal'
+    val succ : ('a -> goal) -> ((_, _) injected -> 'a) -> goal
+
+    (** Zero logic parameters *)
+    val zero : 'a -> 'a
+
+    (** {3 One to five logic parameter(s)} *)
+    val one   : (_ injected ->                                                         goal) -> goal
+    val two   : (_ injected -> _ injected ->                                           goal) -> goal
+    val three : (_ injected -> _ injected -> _ injected ->                             goal) -> goal
+    val four  : (_ injected -> _ injected -> _ injected -> _ injected ->               goal) -> goal
+    val five  : (_ injected -> _ injected -> _ injected -> _ injected -> _ injected -> goal) -> goal
+
+    (** {3 One to five logic parameter(s), conventional names} *)
+    val q     : (_ injected ->                                                         goal) -> goal
+    val qr    : (_ injected -> _ injected ->                                           goal) -> goal
+    val qrs   : (_ injected -> _ injected -> _ injected ->                             goal) -> goal
+    val qrst  : (_ injected -> _ injected -> _ injected -> _ injected ->               goal) -> goal
+    val pqrst : (_ injected -> _ injected -> _ injected -> _ injected -> _ injected -> goal) -> goal
+  end
+
+(** {2 Combinators to produce fresh variables} *)
+module Eigen :
+  sig
+    (** [succ num f] increments the number of free logic variables in
+        a goal; can be used to get rid of ``fresh'' syntax extension
+    *)
+    val succ : ('a -> goal) -> ((_, _) injected -> 'a) -> goal
 
     (** Zero logic parameters *)
     val zero : 'a -> 'a
