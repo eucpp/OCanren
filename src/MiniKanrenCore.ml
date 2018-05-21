@@ -894,18 +894,17 @@ module Subst :
        * 2) If we do unification after a fresh, then in case of failure it doesn't matter if
        *    the variable is be distructively substituted: we will not look on it in future.
        *)
-      if (scope = var.scope) && (scope <> Var.non_local_scope)
+      (* if (scope = var.scope) && (scope <> Var.non_local_scope)
       then begin
         var.subst <- Some (Obj.repr term);
         subst
       end
-        else
+        else *)
           VarMap.add var (Term.repr term) subst
 
     exception Unification_failed
 
     let unify ?(subsume=false) ?(scope=Var.non_local_scope) env subst x y =
-      (* Printf.printf "%s === %s\n" (Term.show !!!x) (Term.show !!!y); *)
       (* The idea is to do the unification and collect the unification prefix during the process *)
       let extend var term (prefix, subst) =
         let subst = extend ~scope env subst var term in
