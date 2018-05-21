@@ -23,61 +23,61 @@ let _ =
   runInt    (-1) q qh (REPR (fun q -> ?~((q === !1) ||| (q =/= !1))));
 
   (* test that conjunction and disjunction under negation behave properly *)
-  runIList  (-1) q qh (REPR (fun q -> (fresh (x y)   ((x =/= !1) ||| (y =/= !2)) (q === !![x; y]))));
-  runIList  (-1) q qh (REPR (fun q -> (fresh (x y) ?~((x === !1) &&& (y === !2)) (q === !![x; y]))));
+  runIList  (-1) q qh (REPR (fun q -> Fresh.two (fun x y -> ((x =/= !1) ||| (y =/= !2)) &&& (q === !![x; y]))));
+  runIList  (-1) q qh (REPR (fun q -> Fresh.two (fun x y -> ?~((x === !1) &&& (y === !2)) &&& (q === !![x; y]))));
 
-  runIList  (-1) q qh (REPR (fun q -> (fresh (x y)   ((x =/= !1) &&& (y =/= !2)) (q === !![x; y]))));
-  runIList  (-1) q qh (REPR (fun q -> (fresh (x y) ?~((x === !1) ||| (y === !2)) (q === !![x; y]))));
+  runIList  (-1) q qh (REPR (fun q -> Fresh.two (fun x y ->  ((x =/= !1) &&& (y =/= !2)) &&& (q === !![x; y]))));
+  runIList  (-1) q qh (REPR (fun q -> Fresh.two (fun x y -> ?~((x === !1) ||| (y === !2)) &&& (q === !![x; y]))));
 
   (* test lists (implicit conjunction) *)
-  runIList  (-1) q qh (REPR (fun q -> (fresh (x y) ((q === !![x; y]) &&& ?~(!![x; y] === !![!1; !2])))));
-  runIList  (-1) q qh (REPR (fun q -> (fresh (x y) ((q === !![x; y]) &&& ?~(!![x; y] =/= !![!1; !2])))));
+  runIList  (-1) q qh (REPR (fun q -> Fresh.two (fun x y -> (q === !![x; y]) &&& ?~(!![x; y] === !![!1; !2]))));
+  runIList  (-1) q qh (REPR (fun q -> Fresh.two (fun x y -> (q === !![x; y]) &&& ?~(!![x; y] =/= !![!1; !2]))));
 
-  runIList  (-1) q qh (REPR (fun q -> (fresh (x)   (q =/= !![!1; x; !2]))));
-  runIList  (-1) q qh (REPR (fun q -> (fresh (x) ?~(q === !![!1; x; !2]))));
+  runIList  (-1) q qh (REPR (fun q -> Fresh.one (fun x -> (q =/= !![!1; x; !2]))));
+  runIList  (-1) q qh (REPR (fun q -> Fresh.one (fun x -> ?~(q === !![!1; x; !2]))));
 
   (* this test must succeed and derive constraint `forall (x). q =/= [x]`  *)
-  runIList  (-1) q qh (REPR (fun q -> ?~(fresh (x) (q === !![x]))));
+  runIList  (-1) q qh (REPR (fun q -> ?~(Fresh.one (fun x -> (q === !![x])))));
 
   (* the following two tests must fail *)
-  runIList  (-1) q qh (REPR (fun q -> ?~(fresh (x) (q === !![x])) &&& (fresh (y) (q === !![y]))));
-  runIList  (-1) q qh (REPR (fun q -> (fresh (y) (q === !![y])) &&& ?~(fresh (x) (q === !![x]))));
+  runIList  (-1) q qh (REPR (fun q -> ?~(Fresh.one (fun x -> q === !![x])) &&& (Fresh.one (fun y -> q === !![y]))));
+  runIList  (-1) q qh (REPR (fun q -> (Fresh.one (fun y -> q === !![y])) &&& ?~(Fresh.one (fun x -> q === !![x]))));
 
   (* this tests must fail because there is [x] such that [x === 1] (or [x === q]) *)
-  runInt    (-1) q  qh (REPR (fun q -> ?~(fresh (x) (x === !1))));
-  runInt    (-1) q  qh (REPR (fun q -> (q === !1) &&& ?~(fresh (x) (x === q))));
-  runInt    (-1) q  qh (REPR (fun q -> ?~(fresh (x) (x === q))));
+  runInt    (-1) q  qh (REPR (fun q -> ?~(Fresh.one (fun x -> x === !1))));
+  runInt    (-1) q  qh (REPR (fun q -> (q === !1) &&& ?~(Fresh.one (fun x -> x === q))));
+  runInt    (-1) q  qh (REPR (fun q -> ?~(Fresh.one (fun x -> x === q))));
 
   (* this tests must fail because there is [x] such that [x === 1 \/ x === 2] (or [x === q \/ x === r]) *)
-  runInt    (-1) q  qh  (REPR (fun q   -> ?~(fresh (x) ((x === !1) ||| (x === !2)))));
-  runInt    (-1) qr qrh (REPR (fun q r -> (q === !1) &&& (r === !2) &&& ?~(fresh (x) ((x === q) ||| (x === r)))));
-  runInt    (-1) qr qrh (REPR (fun q r -> ?~(fresh (x) ((x === q) ||| (x === r)))));
+  runInt    (-1) q  qh  (REPR (fun q   -> ?~(Fresh.one (fun x -> (x === !1) ||| (x === !2)))));
+  runInt    (-1) qr qrh (REPR (fun q r -> (q === !1) &&& (r === !2) &&& ?~(Fresh.one (fun x -> (x === q) ||| (x === r)))));
+  runInt    (-1) qr qrh (REPR (fun q r -> ?~(Fresh.one (fun x -> ((x === q) ||| (x === r))))));
 
   (* these goals also should fail because there is [x] such that [x =/= q] (or [x =/= q \/ x =/= r]) *)
-  runInt    (-1) q  qh  (REPR (fun q    -> ?~(fresh (x) (x =/= q))));
-  runInt    (-1) qr qrh (REPR (fun q r  -> ?~(fresh (x) ((x =/= q) ||| (x =/= r)))));
+  runInt    (-1) q  qh  (REPR (fun q    -> ?~(Fresh.one (fun x -> (x =/= q)))));
+  runInt    (-1) qr qrh (REPR (fun q r  -> ?~(Fresh.one (fun x -> ((x =/= q) ||| (x =/= r))))));
 
   (* this test must fail because there is [x] such that [q =/= [x]] *)
-  runIList  (-1) q qh (REPR (fun q -> ?~(fresh (x) (q =/= !![x]))));
+  runIList  (-1) q qh (REPR (fun q -> ?~(Fresh.one (fun x -> (q =/= !![x])))));
 
   (* this test must derive constraint [q =/= r] *)
-  runInt    (-1) qr qrh (REPR (fun q r -> ?~(fresh (x) ((x === q) &&& (x === r)))));
+  runInt    (-1) qr qrh (REPR (fun q r -> ?~(Fresh.one (fun x -> ((x === q) &&& (x === r))))));
 
   (* this test must fail because there is [x] such that [x =/= q /\ x =/= r] *)
-  runInt    (-1) qr qrh (REPR (fun q r -> ?~(fresh (x) ((x =/= q) &&& (x =/= r)))));
+  runInt    (-1) qr qrh (REPR (fun q r -> ?~(Fresh.one (fun x -> ((x =/= q) &&& (x =/= r))))));
 
   (* this test is equal to `forall (x). exist (y) (x === y)` and should succeed *)
-  runIList  (-1) q qh (REPR (fun q -> ?~(fresh (x) ?~(fresh (y) (x === y)))));
+  runIList  (-1) q qh (REPR (fun q -> ?~(Fresh.one (fun x -> ?~(Fresh.one (fun y -> x === y))))));
 
   (* this test is equal to `forall (x). exist (y) (x =/= y)` and should succeed *)
-  runIList  (-1) q qh (REPR (fun q -> ?~(fresh (x) ?~(fresh (y) (x =/= y)))));
+  runIList  (-1) q qh (REPR (fun q -> ?~(Fresh.one (fun x -> ?~(Fresh.one (fun y -> x =/= y))))));
 
   (* this test is equal to `forall (x). exist (y) (q === y)` and should succeed *)
-  runIList  (-1) q qh (REPR (fun q -> ?~(fresh (x) ?~(fresh (y) (q === y)))));
+  runIList  (-1) q qh (REPR (fun q -> ?~(Fresh.one (fun x -> ?~(Fresh.one (fun y -> q === y))))));
 
   (* this test is equal to `forall (x). exist (y) (q =/= y)` and should succeed *)
-  runIList  (-1) q qh (REPR (fun q -> ?~(fresh (x) ?~(fresh (y) (q =/= y)))))
-
+  runIList  (-1) q qh (REPR (fun q -> ?~(Fresh.one (fun x -> ?~(Fresh.one (fun y -> q =/= y))))));
+  ()
 
 let runNat n = runR (Nat.reify) (fun n -> string_of_int @@ Nat.to_int n) (GT.show(Nat.logic)) n
 
@@ -90,4 +90,4 @@ let peano n =
 
 let _ =
   (* test that negation of infinite goals is able to terminate if arguments are ground enough *)
-  runNat    (-1) q qh (REPR (fun q -> (fresh (n) (n === nat 3) ?~(peano n))))
+  runNat    (-1) q qh (REPR (fun q -> (Fresh.one (fun n -> (n === nat 3) &&& ?~(peano n)))))
