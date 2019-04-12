@@ -347,7 +347,7 @@ module Term :
      *)
     val iter : fvar:(Var.t -> unit) -> fval:(value -> unit) -> t -> unit
 
-    (* [fold ~fvar ~fval ~init x] fold over OCaml's value extended with logic variables;
+    (* [fold ~fvar ~fval ~init x] fold over OCaml's value extended with logic variables;F
      *   handles primitive types with the help of [fval] and logic variables with the help of [fvar]
      *)
     val fold : fvar:('a -> Var.t -> 'a) -> fval:('a -> value -> 'a) -> init:'a -> t -> 'a
@@ -452,11 +452,12 @@ module Term :
       if (is_box tx) then
         let sx = Obj.size x in
         if is_var tx sx x then
-          let v = Obj.magic x in
-          match v.Var.constraints with
-          | [] -> Printf.sprintf "_.%d" v.Var.index
-          | cs -> Printf.sprintf "_.%d{=/= %s}" v.Var.index (String.concat "; " @@ List.map show cs)
+            let v = Obj.magic x in
+            match v.Var.constraints with
+            | [] -> Printf.sprintf "_.%d" v.Var.index
+            | cs -> Printf.sprintf "_.%d{=/= %s}" v.Var.index (String.concat "; " @@ List.map show cs)
         else
+          (* Printf.printf "not_var\n"; *)
           let rec inner i =
             if i < sx then
               (show @@ Obj.field x i)::(inner (i+1))
@@ -943,6 +944,10 @@ module Subst :
         ~fval:(fun x -> ())
 
     let qunify env subst x y =
+
+      (* Printf.printf "%s === %s\n"
+        Term.(show @@ repr (apply env subst x)) Term.(show @@ repr (apply env subst y)); *)
+
       (* The idea is to do the unification and collect the unification prefix during the process *)
       let extend var term (prefix, subst) =
         let subst = extend ~scope:Var.non_local_scope env subst var term in
@@ -1226,8 +1231,11 @@ module Disequality :
             else
               VarMap.add var term map
           in
-          let ({exist; univ} as t) = ListLabels.fold_left bs ~init:t
+          let ({exist; univ} as t) =
+          (* Printf.printf "length(bs)=%d\n" (List.length bs); *)
+          ListLabels.fold_left bs ~init:t
             ~f:(let open Binding in fun {exist; univ} {var; term} ->
+              (* Printf.printf "%s =/= %s\n" (Term.show @@ Term.repr var) (Term.(show) term); *)
               match Env.quant env var with
               | Univ  -> { exist; univ  = upd var term univ ; }
               | Exist | Free ->
@@ -1291,6 +1299,8 @@ module Disequality :
           helper exist @@ helper univ []
 
         let simplify' env subst { exist; univ } =
+          (* Printf.printf "length(exist) = %d\n" (VarMap.cardinal exist); *)
+          (* Printf.printf "length(univ) = %d\n" (VarMap.cardinal univ); *)
           match Subst.merge env subst (Subst.of_map univ) with
           (* we shouldn't get here, because it would mean that disequality is fulfilled.
            * But we had to detect it during search *)
@@ -1317,15 +1327,17 @@ module Disequality :
           | None    -> None
           | Some ds -> Some (of_list env subst ds)
 
-        let witness env subst t =
+        let witness env subst ({univ; } as t) =
           match simplify' env subst t with
           | None    -> None
           | Some ds ->
-            ListLabels.fold_left ds ~init:(Some Subst.empty)
+            (* Printf.printf "length(ds) = %d\n" (List.length ds); *)
+            ListLabels.fold_left ds ~init:(Some (Subst.of_map univ))
               ~f:(let open Binding in fun acc {var; term} ->
                 match acc with
                 | None        -> None
                 | Some subst  ->
+
                   match Subst.qunify env subst !!!var term with
                   | None              -> None
                   | Some (_, subst')  -> Some subst'
@@ -1738,6 +1750,7 @@ module State :
     let complement
       ({env=env1; subst=subst1; ctrs=ctrs1} as st1)
       ({env=env2; subst=subst2; ctrs=ctrs2} as st2) =
+      (* Printf.printf "complement\n"; *)
       (* compute the diff of substs and transform it into disequality *)
       let dsubst = Subst.diff env2 subst2 subst1 in
       (* compute the diff of disequalities and transform it into list of substitutions *)
