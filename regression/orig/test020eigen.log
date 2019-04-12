@@ -1,0 +1,11 @@
+fun q -> Eigen.one (fun x -> (===) q x), all answers {
+}
+fun q -> Eigen.one (fun x -> Fresh.one (fun y -> (===) x y)), all answers {
+q=_.10;
+}
+fun q ->
+  Eigen.one (fun x -> Fresh.one (fun y -> (&&&) ((===) x y) ((===) q y))), all answers {
+}
+fun q ->
+  Eigen.one (fun x -> Fresh.one (fun y -> (&&&) ((===) x y) ((===) y q))), all answers {
+}
