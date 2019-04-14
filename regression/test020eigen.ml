@@ -188,14 +188,9 @@ let _ =
   ));
 
   (* forall x y. q =/= [x; y] --- should succeed (and derive constraint) *)
-  runIPair (-1) q qh (REPR (fun q ->
+  runIList (-1) q qh (REPR (fun q ->
     Eigen.two (fun x y ->
-      q =/= pair x y
-      (* we should use list here, because techically the query above
-       * should fail (once we'll add type constraints),
-       * but for some reason it doesn't derive constraint for list
-       *)
-      (* q =/= list [x; y] *)
+      q =/= list [x; y]
     )
   ));
 
