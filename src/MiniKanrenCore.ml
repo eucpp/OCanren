@@ -1258,7 +1258,7 @@ module Disequality :
             ~f:(let open Binding in fun {exist; univ} {var; term} ->
               (* Printf.printf "%s =/= %s\n" (Term.show @@ Term.repr var) (Term.(show) term); *)
               match Env.quant env var with
-              | Univ  -> { exist; univ  = upd var term univ ; }
+              | Univ  -> { exist; univ = upd var term univ ; }
               | Exist | Free ->
                 match Env.var env term with
                 | None    -> { univ ; exist = upd var term exist; }

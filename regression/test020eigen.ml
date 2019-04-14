@@ -26,6 +26,11 @@ let _ =
     Eigen.one (fun x -> q === x))
   );
 
+  (* forall x. x === q --- should fail *)
+  runInt (-1) q qh (REPR (fun q ->
+    Eigen.one (fun x -> x === q))
+  );
+
   (* forall x. exists y. x === y --- should succeed *)
   runInt (-1) q qh (REPR (fun q ->
     Eigen.one (fun x ->
@@ -141,6 +146,13 @@ let _ =
     )
   ));
 
+  (* forall x. q =/= x --- should fail *)
+  runInt (-1) q qh (REPR (fun q ->
+    Eigen.one (fun x ->
+      q =/= x
+    )
+  ));
+
   (* forall x. x =/= 5 --- should fail *)
   runInt (-1) q qh (REPR (fun q ->
     Eigen.one (fun x ->
@@ -171,7 +183,7 @@ let _ =
     )
   ));
 
-  (* forall x. x =/= 1 :: x --- should succeed (occurs-check) *)
+  (* forall x. x =/= 1::x --- should succeed (occurs-check) *)
   runInt (-1) q qh (REPR (fun q ->
     Eigen.one (fun x ->
         x =/= !!1 % x
@@ -197,7 +209,6 @@ let _ =
   (* forall x. x =/= (1; q) --- should fail *)
   runInt (-1) q qh (REPR (fun q ->
     Eigen.one (fun x ->
-      (* possible bug here, with query `forall x y` *)
       x =/= pair !!1 q
     )
   ));
@@ -332,6 +343,101 @@ let _ =
         (z =/= list [x; y]) &&& Fresh.two (fun a b ->
           z === list [a; b]
         )
+      )
+    )
+  ));
+
+  (* exists x. forall y z. x =/= [y; z] /\ exists a b. x === [a; b] --- should succeed *)
+  runInt (-1) q qh (REPR (fun q ->
+    Fresh.one (fun x ->
+      Eigen.two (fun y z ->
+        (x =/= list [y; z]) &&&
+        Fresh.two (fun a b ->
+          x === list [a; b]
+        )
+      )
+    )
+  ));
+
+  (* exists x. forall y z. x =/= [y; z] /\ exists a b. x === [a; b] --- should succeed *)
+  runInt (-1) q qh (REPR (fun q ->
+    Fresh.one (fun x ->
+      Eigen.two (fun y z ->
+        (x =/= list [y; z]) &&&
+        Fresh.two (fun a b ->
+          x === list [a; b]
+        )
+      )
+    )
+  ));
+
+  (* forall y z. q =/= [y; z] /\ exists a b. q === [a; b] ---
+   *    should succeed (and derive q = [_.0, _.1]) *)
+  runIList (-1) q qh (REPR (fun q ->
+    Eigen.two (fun y z ->
+      (q =/= list [y; z]) &&&
+      Fresh.two (fun a b ->
+        q === list [a; b]
+      )
+    )
+  ));
+
+  (* forall x y. exists z. z =/= [x; y] /\ z === [x ; y] --- should fail *)
+  runInt (-1) q qh (REPR (fun q ->
+    Eigen.two (fun x y ->
+      Fresh.one (fun z ->
+        (z =/= list [x; y]) &&& (z === list [x; y])
+      )
+    )
+  ));
+
+  (* forall x y. exists z. z =/= x::y /\ z === [1 ; 2; 3] --- should fail *)
+  runInt (-1) q qh (REPR (fun q ->
+    Eigen.two (fun x y ->
+      Fresh.one (fun z ->
+        (z =/= x % y) &&& (z === list [!!1; !!2; !!3])
+      )
+    )
+  ));
+
+  (* exists x y z. forall a b. x === y::z /\ x =/= a::b --- should fail *)
+  runInt (-1) q qh (REPR (fun q ->
+    Fresh.three (fun x y z ->
+      Eigen.two (fun a b ->
+        (x === y % z) &&& (x =/= a % b)
+      )
+    )
+  ));
+
+  (* forall a b. exists x y z. x =/= a::b /\ x === y::z /\ y::z === [1; 2; 3] ---
+   *     should fail *)
+  runInt (-1) q qh (REPR (fun q ->
+    Eigen.two (fun a b ->
+      Fresh.three (fun x y z ->
+        (x =/= a % b) &&&
+        (x === y % z) &&&
+        (y % z === list [!!1; !!2; !!3])
+      )
+    )
+  ));
+
+  (* exists x. forall y. exists z. y =/= (x, z) --- should succeed *)
+  runInt (-1) q qh (REPR (fun q ->
+    Fresh.one (fun x ->
+      Eigen.one (fun y ->
+        Fresh.one (fun z ->
+          y =/= pair x y
+        )
+      )
+    )
+  ));
+
+  (* forall x. exists y. x === y /\ y =/= 5 --- should fail (consider x = 5) *)
+  runInt (-1) q qh (REPR (fun q ->
+    Eigen.one (fun x ->
+      Fresh.one (fun y ->
+        (* unsound with (x === y) conjunct !!! *)
+        (y === x) &&& (y =/= !!5)
       )
     )
   ));
