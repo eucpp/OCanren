@@ -1337,7 +1337,7 @@ module Disequality :
                 match acc with
                 | None        -> None
                 | Some subst  ->
-
+                  (* Printf.printf "%s === %s\n" (Term.show @@ Term.repr var) (Term.(show) term); *)
                   match Subst.qunify env subst !!!var term with
                   | None              -> None
                   | Some (_, subst')  -> Some subst'
