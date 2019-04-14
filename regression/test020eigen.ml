@@ -436,7 +436,15 @@ let _ =
   runInt (-1) q qh (REPR (fun q ->
     Eigen.one (fun x ->
       Fresh.one (fun y ->
-        (* unsound with (x === y) conjunct !!! *)
+        (x === y) &&& (y =/= !!5)
+      )
+    )
+  ));
+
+  (* forall x. exists y. y === x /\ y =/= 5 --- should fail (consider x = 5) *)
+  runInt (-1) q qh (REPR (fun q ->
+    Eigen.one (fun x ->
+      Fresh.one (fun y ->
         (y === x) &&& (y =/= !!5)
       )
     )

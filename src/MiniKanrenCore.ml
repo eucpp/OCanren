@@ -667,6 +667,7 @@ module Env :
     let is_var env x = (var env x) <> None
 
     let quant env x =
+      (* Printf.printf "strata(env)=%d; strata(var)=%d\n" env.strata x.Var.strata; *)
       let rec helper i s =
         if s = env.strata then
           if (i mod 2) = 0 then Var.Exist else Var.Univ
@@ -918,7 +919,13 @@ module Subst :
           ~fvar:(fun ((_, subst) as acc) x y ->
             match walk env subst x, walk env subst y with
             | Var x, Var y      ->
-              if Var.equal x y then acc else extend x (Term.repr y) acc
+              if Var.equal x y then
+                acc
+              else
+                if x.strata >= y.strata then
+                  extend x (Term.repr y) acc
+                else
+                  extend y (Term.repr x) acc
             | Var x, Value y    -> extend x y acc
             | Value x, Var y    -> extend y x acc
             | Value x, Value y  -> helper x y acc
@@ -945,8 +952,10 @@ module Subst :
         ~fval:(fun x -> ())
 
     let of_quant_list env subst bs =
+      (* Printf.printf "length(bs)=%d\n" (List.length bs); *)
       ListLabels.fold_left bs ~init:(Some subst)
         ~f:(let open Binding in fun acc {var; term} ->
+          (* Printf.printf "%s === %s\n" (Term.show @@ Term.repr var) (Term.(show) term); *)
           match acc with
           | None -> None
           | Some subst ->
