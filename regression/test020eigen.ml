@@ -304,13 +304,13 @@ let _ =
 
   (* unsound *)
   (* exists x. forall y z. x === [1] /\ x =/= [y; z] --- should succeed *)
-  (* runInt (-1) q qh (REPR (fun q ->
+  runInt (-1) q qh (REPR (fun q ->
     Fresh.one (fun x ->
       Eigen.two (fun y z ->
         (x === list [!!1]) &&& (x =/= list [y; z])
       )
     )
-  )); *)
+  ));
 
   (* forall x y. exists z. z =/= [x; y] /\ z === [1] --- should succeed *)
   runInt (-1) q qh (REPR (fun q ->

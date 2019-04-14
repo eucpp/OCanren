@@ -784,7 +784,8 @@ module Subst :
      *)
     val unify : ?subsume:bool -> ?scope:Var.scope -> Env.t -> t -> 'a -> 'a -> (Binding.t list * t) option
 
-    val qunify : Env.t -> t -> 'a -> 'a -> (Binding.t list * t) option
+    val of_quant_list : Env.t -> t -> Binding.t list -> t option
+    (* val qunify : Env.t -> t -> 'a -> 'a -> (Binding.t list * t) option *)
 
     val diff : Env.t -> t -> t -> t
 
@@ -942,6 +943,26 @@ module Subst :
       iter env subst term
         ~fvar:(fun v -> if Env.quant env v = Var.Univ then raise Unification_failed)
         ~fval:(fun x -> ())
+
+    let of_quant_list env subst bs =
+      ListLabels.fold_left bs ~init:(Some subst)
+        ~f:(let open Binding in fun acc {var; term} ->
+          match acc with
+          | None -> None
+          | Some subst ->
+            match Env.quant env var with
+            | Univ -> None
+            | Exist ->
+              (* all existsentially quantified vars
+               * should already be in the initial `subst`
+               *)
+              assert false
+            | Free ->
+              try
+                univ_check env subst term;
+                Some (VarMap.add var term subst)
+              with Unification_failed -> None
+      )
 
     let qunify env subst x y =
 
@@ -1331,17 +1352,26 @@ module Disequality :
           match simplify' env subst t with
           | None    -> None
           | Some ds ->
+            Subst.of_quant_list env (Subst.of_map univ) ds
             (* Printf.printf "length(ds) = %d\n" (List.length ds); *)
-            ListLabels.fold_left ds ~init:(Some (Subst.of_map univ))
+            (* ListLabels.fold_left ds ~init:(Some (Subst.of_map univ))
               ~f:(let open Binding in fun acc {var; term} ->
                 match acc with
                 | None        -> None
                 | Some subst  ->
+                  match Env.quant env var with
+                  | Free ->
+                    try
+                      Subst.univ_check env subst term;
+
+                    with Unification_failed -> None
+                  | *)
+
                   (* Printf.printf "%s === %s\n" (Term.show @@ Term.repr var) (Term.(show) term); *)
-                  match Subst.qunify env subst !!!var term with
+                  (* match Subst.qunify env subst !!!var term with
                   | None              -> None
-                  | Some (_, subst')  -> Some subst'
-              )
+                  | Some (_, subst')  -> Some subst' *)
+
 
         let is_relevant env subst {exist} fv =
           (* left those disjuncts that contains binding only for variables from [fv],
