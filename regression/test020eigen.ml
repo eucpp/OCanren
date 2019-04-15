@@ -58,6 +58,24 @@ let _ =
     )
   ));
 
+  (* forall x. exists y. q === x --- should fail (same as previous) *)
+  runInt (-1) q qh (REPR (fun q ->
+    Eigen.one (fun x ->
+      Fresh.one (fun y ->
+        (y === x) &&& (q === y)
+      )
+    )
+  ));
+
+  (* forall x. exists y. q === x --- should fail (same as previous) *)
+  runInt (-1) q qh (REPR (fun q ->
+    Eigen.one (fun x ->
+      Fresh.one (fun y ->
+        (y === x) &&& (y === q)
+      )
+    )
+  ));
+
   (* forall x. exists y. q === (x,x) --- should fail *)
   runIPair (-1) q qh (REPR (fun q ->
     Eigen.one (fun x ->
@@ -449,5 +467,43 @@ let _ =
       )
     )
   ));
+
+  (* forall x. exists y. y === x /\ y =/= q --- should fail (consider x = q) *)
+  runInt (-1) q qh (REPR (fun q ->
+    Eigen.one (fun x ->
+      Fresh.one (fun y ->
+        (x === y) &&& (y =/= q)
+      )
+    )
+  ));
+
+  (* forall x. exists y z. y === x /\ y =/= z --- should succeed *)
+  runInt (-1) q qh (REPR (fun q ->
+    Eigen.one (fun x ->
+      Fresh.two (fun y z ->
+        (x === y) &&& (y =/= z)
+      )
+    )
+  ));
+
+  (* q =/= [1; 2] /\ forall x y. q =/= [1; 2] ---
+   *     should succeed (and derive constraint q =/= [_.0; _.1]) *)
+  (* runIList (-1) q qh (REPR (fun q ->
+    (* TODO: univerasal disequality subsumption *)
+    (q =/= list [!!1; !!2]) &&&
+    Eigen.two (fun x y ->
+      (q =/= list [x; y])
+    )
+  ));
+
+  (* q =/= [1; 2] /\ forall x y. q =/= [1; 2] --- same as previous,
+   *     should succeed (and derive constraint q =/= [_.0; _.1]) *)
+  runIList (-1) q qh (REPR (fun q ->
+    (* TODO: univerasal disequality subsumption *)
+    Eigen.two (fun x y ->
+      (q =/= list [x; y])
+    ) &&&
+    (q =/= list [!!1; !!2])
+  )); *)
 
   ()

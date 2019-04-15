@@ -1144,7 +1144,13 @@ module Disequality :
 
         let add env t var term =
           try
-            let terms = S.add term @@ VarMap.find var t in
+            (* TODO: remove subsumed *)
+            let terms = VarMap.find var t in
+            (* let terms = S.filter (fun term' ->
+              not @@ Subst.Answer.subsumed env term' term
+            ) @@ VarMap.find var t
+            in *)
+            let terms = S.add term terms in
             VarMap.add var terms @@ VarMap.remove var t
           with Not_found ->
             VarMap.add var (S.singleton term) t
@@ -1152,6 +1158,10 @@ module Disequality :
         let mem env t var term =
           try
             S.mem term @@ VarMap.find var t
+            (* TODO: check subsumption *)
+            (* S.exists (fun term' ->
+              Subst.Answer.subsumed env term term'
+            ) @@ VarMap.find var t *)
           with Not_found -> false
 
         let extract t v =
@@ -1483,7 +1493,7 @@ module Disequality :
             try
               let disj = M.find id t in
               (* refined constraint should be more specialized (i.e. subsumed by earlier constraint) *)
-              assert (Disjunct.subsumed env subst disj' disj);
+              (* assert (Disjunct.subsumed env subst disj' disj); *)
               (M.add id disj' refined, added)
             with Not_found ->
               (refined, M.add id disj' added)
@@ -1557,7 +1567,9 @@ module Disequality :
                  * then extended answers are [(x =/= 1) /\ (y =/= 2)] and [(x =/= 1) /\ (y =/= 2) /\ (z =/= 3)],
                  * but the second one is subsumed by the first one and can be thrown away
                  *)
-                if List.exists (fun {var; term} -> Answer.mem env answ var term) bs then
+                if ListLabels.exists bs
+                  ~f:(fun {var; term} -> Answer.mem env answ var term)
+                then
                   [answ]
                 else
                   List.map (fun {var; term} -> Answer.add env answ var term) bs
