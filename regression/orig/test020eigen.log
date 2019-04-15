@@ -98,6 +98,15 @@ q=_.10;
 }
 fun q -> Eigen.one (fun x -> (=/=) (pair x x) (pair ((!!) 1) ((!!) 1))), all answers {
 }
+fun q -> Eigen.one (fun x -> (=/=) (pair x x) (pair q ((!!) 1))), all answers {
+q=_.10 [=/= 1];
+}
+fun q -> Eigen.one (fun x -> (=/=) (pair x x) (pair ((!!) 1) q)), all answers {
+q=_.10 [=/= 1];
+}
+fun q -> Eigen.one (fun x -> (=/=) (pair x ((!!) 1)) (pair q x)), all answers {
+q=_.10 [=/= 1];
+}
 fun q ->
   Eigen.two
     (fun x y -> (=/=) (list [x; y; x]) (list [(!!) 0; (!!) 1; (!!) 2])), all answers {
@@ -259,4 +268,38 @@ fun q ->
 fun q ->
   Eigen.one (fun x -> Fresh.two (fun y z -> (&&&) ((===) x y) ((=/=) y z))), all answers {
 q=_.10;
+}
+fun q ->
+  Eigen.one
+    (fun x ->
+       Fresh.one
+         (fun y -> (&&&) ((=/=) x y) (Fresh.one (fun z -> (===) y z)))), all answers {
+q=_.10;
+}
+fun q ->
+  Eigen.one
+    (fun x ->
+       Fresh.one
+         (fun y -> (&&&) (Fresh.one (fun z -> (===) y z)) ((=/=) x y))), all answers {
+q=_.10;
+}
+fun q ->
+  Fresh.one
+    (fun x ->
+       Eigen.one
+         (fun y ->
+            Fresh.one
+              (fun z ->
+                 (&&&) ((=/=) (pair x z) (pair y y)) ((===) q (pair x z))))), all answers {
+q=(_.11, _.13);
+}
+fun q ->
+  Fresh.one
+    (fun x ->
+       Eigen.one
+         (fun y ->
+            Fresh.one
+              (fun z ->
+                 (&&&) ((=/=) (pair x y) (pair y z)) ((===) q (pair x z))))), all answers {
+q=(_.11, _.13);
 }
