@@ -224,10 +224,58 @@ let _ =
     )
   ));
 
+  (* (forall a b. q === [a; b]) /\ (forall x y. q =/= [x; y]) --- should fail *)
+  runIList (-1) q qh (REPR (fun q ->
+    Fresh.two (fun a b ->
+      q === list [a; b]
+    ) &&&
+    Eigen.two (fun x y ->
+      q =/= list [x; y]
+    )
+  ));
+
+  (* (forall x y. q =/= [x; y]) /\ (forall a b. q === [a; b]) --- should fail *)
+  runIList (-1) q qh (REPR (fun q ->
+    Eigen.two (fun x y ->
+      q =/= list [x; y]
+    ) &&&
+    Fresh.two (fun a b ->
+      q === list [a; b]
+    )
+  ));
+
   (* forall x. x =/= (1; q) --- should fail *)
   runInt (-1) q qh (REPR (fun q ->
     Eigen.one (fun x ->
       x =/= pair !!1 q
+    )
+  ));
+
+  (* forall x. (x, x) =/= (0, 1) --- should succeed *)
+  runInt (-1) q qh (REPR (fun q ->
+    Eigen.one (fun x ->
+      pair x x =/= pair !!0 !!1
+    )
+  ));
+
+  (* forall x. (x, x) =/= (1, 1) --- should fail *)
+  runInt (-1) q qh (REPR (fun q ->
+    Eigen.one (fun x ->
+      pair x x =/= pair !!1 !!1
+    )
+  ));
+
+  (* forall x y. [x; y; x] =/= [0; 1; 2] --- should succeed *)
+  runInt (-1) q qh (REPR (fun q ->
+    Eigen.two (fun x y ->
+      list [x; y; x] =/= list [!!0; !!1; !!2]
+    )
+  ));
+
+  (* forall x y. [x; y; x] =/= [0; 1; 2] --- should succeed (and derive constraint q =/= 0) *)
+  runInt (-1) q qh (REPR (fun q ->
+    Eigen.two (fun x y ->
+      list [x; y; x] =/= list [!!0; !!1; q]
     )
   ));
 
@@ -254,6 +302,15 @@ let _ =
     Eigen.one (fun x ->
       Fresh.one (fun y ->
         pair q x =/= pair y y
+      )
+    )
+  ));
+
+  (* forall x. exists y. (q, y) =/= (x, x) --- should succeed *)
+  runInt (-1) q qh (REPR (fun q ->
+    Eigen.one (fun x ->
+      Fresh.one (fun y ->
+        pair q y =/= pair x x
       )
     )
   ));
@@ -444,7 +501,7 @@ let _ =
     Fresh.one (fun x ->
       Eigen.one (fun y ->
         Fresh.one (fun z ->
-          y =/= pair x y
+          y =/= pair x z
         )
       )
     )
