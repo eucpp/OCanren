@@ -1952,9 +1952,13 @@ module Eigen =
   struct
     let succ prev f = call_eigen (fun x -> prev (f x))
 
-    let zero  f = f
+    let zero f = f
+    let one f = ?~(call_fresh (fun x -> ?~(f x)))
+    let two f = ?~(call_fresh (fun x -> call_fresh (fun y -> ?~(f x y))))
+
+    (* let zero  f = f
     let one   f = succ zero f
-    let two   f = succ one f
+    let two   f = succ one f *)
 
     (* N.B. Manual inlining of numerals will speed-up OCanren a bit (mainly because of less memory consumption) *)
     (* let two   g = fun st ->

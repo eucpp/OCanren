@@ -74,11 +74,25 @@ let test ~n g =
 let _ =
   let open Combinators in
 
-  test ~n:10 @@
+  test ~n:2 @@
     run q (fun q ->
-      Fresh.one (fun y ->
-        red (app (app (k ()) (i ())) y) q
+      red (app (app (k ()) (i ())) (i ())) q
+    );
+
+  test ~n:1 @@
+    run q (fun w ->
+      Fresh.two (fun x y ->
+        red (app (app w x) y) (app (app x y) y)
       )
+      &&&
+      Eigen.two (fun x y ->
+        red (app (app w x) y) (app (app x y) y)
+      )
+      (* &&&
+      ?~ (Fresh.three (fun x y z ->
+        (z =/= app (app x y) y) &&&
+        (red (app (app w x) y) z)
+      )) *)
     );
 
   ()
