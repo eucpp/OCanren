@@ -97,7 +97,7 @@ regression: tests
 test: tests
 
 ######################## Samples stuff #######################################
-SAMPLES_CASES=tree sorting WGC lorry
+SAMPLES_CASES=tree sorting WGC lorry ski
 .PHONY: compile_samples test_samples
 compile_samples:
 	$(MAKE) -C samples all
