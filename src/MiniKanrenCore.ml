@@ -581,7 +581,8 @@ module Env :
     val enter_strata  : t -> unit
     val leave_strata  : t -> unit
 
-    val incr_strata : t -> t
+    val inc_strata : t -> t
+    val dec_strata : t -> t
 
     val check         : t -> Var.t -> bool
     val check_exn     : t -> Var.t -> unit
@@ -640,14 +641,19 @@ module Env :
       (* env.strata      <- new_strata; *)
       ()
 
-    let leave_strata env = ()
-      (* env.strata <- parent_strata env.stratord env.strata *)
+    let leave_strata env =
+      (* env.strata <- parent_strata env.stratord env.strata; *)
+      ()
 
-    let incr_strata env =
+    let inc_strata env =
       let new_strata = 1 + env.next_strata in
       Hashtbl.add env.stratord new_strata env.strata;
       env.next_strata <- new_strata;
       { env with strata = new_strata }
+
+    let dec_strata env =
+      let strata = parent_strata env.stratord env.strata in
+      { env with strata }
 
     let check env v = (v.Var.env = env.anchor)
 
@@ -1107,6 +1113,8 @@ module Disequality :
      *   This function may rebuild internal representation of constraints and thus it returns new object.
      *)
     val recheck : Env.t -> Subst.t -> t -> Binding.t list -> t option
+
+    val recheck_all : Env.t -> Subst.t -> t -> t option
 
     (* [project env subst fv diseq] - projects [diseq] into the set of free-variables [fv],
      *   i.e. it extracts only those constraints that are relevant to variables from [fv]
@@ -1633,6 +1641,11 @@ module Disequality :
         Some cstore
       with Disequality_violated -> None
 
+    let recheck_all env subst cstore =
+      try
+        Some (Conjunct.split @@ Conjunct.recheck env subst @@ combine env subst cstore)
+      with Disequality_violated -> None
+
     let witness env subst cstore =
       Conjunct.witness env subst @@ combine env subst cstore
 
@@ -1739,7 +1752,13 @@ module State :
     val enter_strata : t -> t
     val leave_strata : t -> t
 
-    val incr_strata : t -> t
+    val inc_strata : t -> t
+    val dec_strata : t -> t
+
+    val diff : t -> t -> t
+    val merge : t -> t -> t option
+
+    val negate : t -> t list
 
     val unify : 'a -> 'a -> t -> t option
     val diseq : 'a -> 'a -> t -> t option
@@ -1782,8 +1801,11 @@ module State :
       Env.leave_strata st.env;
       st
 
-    let incr_strata st =
-      new_scope {st with env = Env.incr_strata st.env}
+    let inc_strata st =
+      new_scope {st with env = Env.inc_strata st.env}
+
+    let dec_strata st =
+      new_scope {st with env = Env.dec_strata st.env}
 
     let unify x y ({env; subst; ctrs; scope} as st) =
         match Subst.unify ~scope env subst x y with
@@ -1797,6 +1819,42 @@ module State :
       match Disequality.add_diseq env subst ctrs x y with
       | None      -> None
       | Some ctrs -> Some {st with ctrs}
+
+    let diff
+      ({env=env1; subst=subst1; ctrs=ctrs1} as st1)
+      ({env=env2; subst=subst2; ctrs=ctrs2} as st2) =
+      let subst = Subst.diff env1 subst1 subst2 in
+      let ctrs = Disequality.diff env1 subst1 ctrs1 ctrs2 in
+      { st1 with subst; ctrs }
+
+    let merge
+      ({env=env1; subst=subst1; ctrs=ctrs1} as st1)
+      ({env=env2; subst=subst2; ctrs=ctrs2} as st2) =
+      (* TODO: check envs *)
+      match Subst.merge env1 subst1 subst2 with
+      | None                  -> None
+      | Some (prefix, subst)  ->
+        match Disequality.recheck env1 subst ctrs1 prefix with
+        | None       -> None
+        | Some ctrs1 ->
+          match Disequality.recheck_all env1 subst ctrs2 with
+          | None       -> None
+          | Some ctrs2 ->
+            let ctrs = Disequality.merge_disjoint env1 subst ctrs1 ctrs2 in
+            Some {st1 with env=env1; subst; ctrs}
+
+    let negate ({env; subst; ctrs} as st) =
+      let env = Env.dec_strata env in
+      let dis =
+        Disequality.add_disj env Subst.empty Disequality.empty @@ Subst.split subst
+      in
+      let ss = Disequality.witness env subst ctrs in
+      let sts =
+        ListLabels.map ss ~f:(fun subst -> {st with subst; ctrs=Disequality.empty})
+      in
+      match dis with
+      | Some dis -> {st with subst=Subst.empty; ctrs=dis} :: sts
+      | None -> sts
 
     let complement
       ({env=env1; subst=subst1; ctrs=ctrs1} as st1)
@@ -1900,18 +1958,38 @@ let conde = (?|)
 
 exception Empty_stream
 
-let (?~) g st =
+(* let (?~) g st =
   let complement sts cex =
     let res = List.map (fun st -> State.complement st cex) sts |> List.concat in
     if List.length res = 0 then raise Empty_stream else res;
   in
   (* let st = State.enter_strata st in *)
-  let cexs = g @@ State.incr_strata st in
+  let cexs = g @@ State.inc_strata st in
   (* let st = State.leave_strata st in *)
   try
     Stream.fold complement [st] cexs |>
     (* List.map State.leave_strata |> *)
     Stream.of_list
+  with Empty_stream -> Stream.nil *)
+
+let (?~) g st =
+  let sts' = g @@ State.inc_strata st in
+  let cexs = Stream.map (fun s -> State.diff s st) sts' in
+  let sub ss cex =
+    let ss' = Stream.of_list @@ State.negate cex in
+    let res =
+      Stream.bind ss (fun s ->
+        Stream.bind ss' (fun s' ->
+          match State.merge s s' with
+          | Some res -> Stream.single res
+          | None -> Stream.nil
+        )
+      )
+    in
+    if Stream.is_empty res then raise Empty_stream else res
+  in
+  try
+    Stream.fold sub (Stream.single st) cexs
   with Empty_stream -> Stream.nil
 
 let call_fresh f st =
