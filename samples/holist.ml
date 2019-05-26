@@ -63,18 +63,18 @@ let _ =
   test_l ~n:1 @@
     run q (fun q ->
       Fresh.three (fun a b c ->
-        findo p q (list [list [a; b]; list [c]; list [!!1]; nil ()])
+        findo p q (list [list [a; b]; list [!!1]; list [c]; nil ()])
       )
     );
 
-  test_ll ~n:3 @@
+  test_ll ~n:5 @@
     run q (fun q ->
       Fresh.one (fun x ->
         findo p x q
       )
     );
 
-  (* test_ll ~n:1 @@
+  test_ll ~n:1 @@
     run q (fun q ->
       Fresh.three (fun a b c ->
         filtero p (list [list [a; b]; list [c]; list [!!1]; nil ()])
@@ -89,19 +89,19 @@ let _ =
       )
     );
 
-  test_ll ~n:3 @@
+  test_ll ~n:5 @@
     run q (fun q ->
       filtero p q (list [list [!!1]])
     );
 
-  test_ll ~n:3 @@
+  test_ll ~n:5 @@
     run q (fun q ->
       filtero p q (nil ())
     );
 
-  test_ll ~n:3 @@
+  test_ll ~n:5 @@
     run q (fun q ->
       filtero p q q
-    ); *)
+    );
 
   ()
