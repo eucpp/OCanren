@@ -58,7 +58,9 @@ module Combinators =
 
     (* reduction *)
     let red = Tabling.(tabledrec two) (fun red t u -> conde
-      [ (t === u)
+      [ (*?~ (Fresh.one (fun t' ->
+          (step t t')
+        )) &&&*) (t === u)
       ; Fresh.one (fun t' ->
           (step t t') &&& (red t' u)
         )
@@ -77,22 +79,6 @@ let _ =
   test ~n:2 @@
     run q (fun q ->
       red (app (app (k ()) (i ())) (i ())) q
-    );
-
-  test ~n:1 @@
-    run q (fun w ->
-      Fresh.two (fun x y ->
-        red (app (app w x) y) (app (app x y) y)
-      )
-      &&&
-      Eigen.two (fun x y ->
-        red (app (app w x) y) (app (app x y) y)
-      )
-      (* &&&
-      ?~ (Fresh.three (fun x y z ->
-        (z =/= app (app x y) y) &&&
-        (red (app (app w x) y) z)
-      )) *)
     );
 
   ()

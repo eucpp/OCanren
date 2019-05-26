@@ -23,13 +23,13 @@ let _ =
 
   (* forall x. q === x --- should fail *)
   runInt (-1) q qh (REPR (fun q ->
-    Eigen.one (fun x -> q === x))
-  );
+    Eigen.one (fun x -> q === x)
+  ));
 
   (* forall x. x === q --- should fail *)
   runInt (-1) q qh (REPR (fun q ->
-    Eigen.one (fun x -> x === q))
-  );
+    Eigen.one (fun x -> x === q)
+  ));
 
   (* forall x. exists y. x === y --- should succeed *)
   runInt (-1) q qh (REPR (fun q ->
@@ -76,11 +76,11 @@ let _ =
     )
   ));
 
-  (* forall x. exists y. q === (x,x) --- should fail *)
+  (* forall x. exists y. q === (1,x) --- should fail *)
   runIPair (-1) q qh (REPR (fun q ->
     Eigen.one (fun x ->
       Fresh.one (fun y ->
-        (y === pair x x) &&& (y === q)
+        (y === pair !!1 x) &&& (y === q)
       )
     )
   ));
@@ -194,6 +194,15 @@ let _ =
     )
   ));
 
+  (* forall x. exists y. x =/= q --- should fail *)
+  runInt (-1) q qh (REPR (fun q ->
+    Eigen.one (fun x ->
+      Fresh.one (fun y ->
+        (x =/= y) &&& (y === q)
+      )
+    )
+  ));
+
   (* forall x. x =/= x --- should fail *)
   runInt (-1) q qh (REPR (fun q ->
     Eigen.one (fun x ->
@@ -226,20 +235,20 @@ let _ =
     )
   ));
 
-  (* forall x y. q =/= [x; y] --- should succeed (and derive constraint) *)
-  runIList (-1) q qh (REPR (fun q ->
-    Eigen.two (fun x y ->
-      q =/= list [x; y]
+  (* forall x. q =/= (1, x) --- should succeed (and derive constraint) *)
+  runIPair (-1) q qh (REPR (fun q ->
+    Eigen.one (fun x ->
+      q =/= pair !!1 x
     )
   ));
 
-  (* (forall a b. q === [a; b]) /\ (forall x y. q =/= [x; y]) --- should fail *)
-  runIList (-1) q qh (REPR (fun q ->
-    Fresh.two (fun a b ->
-      q === list [a; b]
+  (* (exists a. q === (1, a)) /\ (forall x. q =/= (1, x)) --- should fail *)
+  runIPair (-1) q qh (REPR (fun q ->
+    Fresh.one (fun a ->
+      q === pair !!1 a
     ) &&&
-    Eigen.two (fun x y ->
-      q =/= list [x; y]
+    Eigen.one (fun x ->
+      q =/= pair !!1 x
     )
   ));
 
@@ -413,7 +422,6 @@ let _ =
     )
   ));
 
-  (* unsound *)
   (* exists x. forall y z. x === [1] /\ x =/= [y; z] --- should succeed *)
   runInt (-1) q qh (REPR (fun q ->
     Fresh.one (fun x ->
