@@ -300,12 +300,17 @@ module Var =
       (index, List.map (fun x -> r @@ Obj.obj x) constraints)
 
     let equal x y =
-      (x.index = y.index) && (x.env = y.env)
+      (x.index = y.index) && (x.strata = y.strata) && (x.env = y.env)
 
     let compare x y =
-      if x.index <> y.index then x.index - y.index else x.env - y.env
+      if x.index <> y.index then
+        x.index - y.index
+      else if x.strata <> y.strata then
+        x.strata - y.strata
+      else
+        x.env - y.env
 
-    let hash x = Hashtbl.hash (x.env, x.index)
+    let hash x = Hashtbl.hash (x.env, x.strata, x.index)
   end
 
 module VarSet = Set.Make(Var)
@@ -605,6 +610,9 @@ module Env :
       (* Counter for allocation of new variables *)
       ; mutable next_var : int
       (* Environment keeps number of current strata *)
+      (* TODO: we should do smtng about it, currently it is not consistent
+       *       to keep strata num here
+       *)
       ; strata : int
       (* Counter for allocation of new stratas *)
       ; mutable next_strata : int
@@ -1841,7 +1849,7 @@ module State :
           | None       -> None
           | Some ctrs2 ->
             let ctrs = Disequality.merge_disjoint env1 subst ctrs1 ctrs2 in
-            Some {st1 with env=env1; subst; ctrs}
+            Some {st1 with subst; ctrs}
 
     let negate ({env; subst; ctrs} as st) =
       let env = Env.dec_strata env in
@@ -1973,7 +1981,8 @@ exception Empty_stream
   with Empty_stream -> Stream.nil *)
 
 let (?~) g st =
-  let sts' = g @@ State.inc_strata st in
+  let st = State.inc_strata st in
+  let sts' = g st in
   let cexs = Stream.map (fun s -> State.diff s st) sts' in
   let sub ss cex =
     let ss' = Stream.of_list @@ State.negate cex in
@@ -1989,7 +1998,7 @@ let (?~) g st =
     if Stream.is_empty res then raise Empty_stream else res
   in
   try
-    Stream.fold sub (Stream.single st) cexs
+    Stream.fold sub (Stream.single @@ State.dec_strata st) cexs
   with Empty_stream -> Stream.nil
 
 let call_fresh f st =
