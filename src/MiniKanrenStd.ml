@@ -21,7 +21,7 @@ open MiniKanrenCore
 @type ('a, 'l) list = Nil | Cons of 'a * 'l with show, gmap, html, eq, compare, foldl, foldr;;
 @type 'a nat = O | S of 'a with show, html, eq, compare, foldl, foldr, gmap;;
 
-module Pair = 
+module Pair =
   struct
 
     type 'a logic' = 'a logic
@@ -68,7 +68,7 @@ module Pair =
 
     module T =
       struct
-        type ('a, 'b) t = 'a * 'b 
+        type ('a, 'b) t = 'a * 'b
         let fmap f g x = GT.(gmap pair) f g x
       end
 
@@ -79,7 +79,7 @@ module Pair =
 
   end
 
-module Option = 
+module Option =
   struct
 
     type 'a logic' = 'a logic
@@ -230,16 +230,16 @@ let neqo x y t =
     (x === y) &&& (t === Bool.falso);
   ]
 
-module Nat = 
+module Nat =
   struct
 
     type 'a logic' = 'a logic
     let logic' = logic
 
-    module X = 
+    module X =
       struct
         type 'a t = 'a nat
-        let fmap f x = GT.(gmap nat) f x 
+        let fmap f x = GT.(gmap nat) f x
       end
 
     include X
@@ -347,7 +347,7 @@ module Nat =
 
   end
 
-let nat n = Nat.nat (Nat.of_int n) 
+let nat n = Nat.nat (Nat.of_int n)
 
 module List =
   struct
@@ -360,7 +360,7 @@ module List =
 
     type ('a, 'l) t = ('a, 'l) list
 
-    module X = 
+    module X =
       struct
         type ('a,'b) t = ('a, 'b) list
         let fmap f g x = GT.gmap list f g x
