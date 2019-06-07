@@ -3,7 +3,7 @@ open MiniKanren
 open Std
 
 let ifte : goal -> goal -> goal -> goal =
-  fun c t e -> (c &&& t) ||| (?~c &&& e)
+  fun c t e -> (c &&& t) ||| ((?~c) &&& e)
 
 let rec findo p e xs =
   Fresh.three (fun x xs' ys' -> ?&
@@ -13,6 +13,17 @@ let rec findo p e xs =
         (findo p e xs')
     ]
   )
+
+let rec removeo p xs ys = ?|
+  [ (xs === nil ()) &&& (ys === nil ())
+  ; Fresh.three (fun x xs' ys' -> ?&
+      [ xs === x % xs'
+      ; ifte (p x)
+          (ys === xs')
+          (ys === x % ys' &&& removeo p xs' ys')
+      ]
+    )
+  ]
 
 let rec filtero p xs ys = ?|
   [ (xs === nil ()) &&& (ys === nil ())
@@ -60,7 +71,7 @@ let _ =
 
   let p l = Fresh.one (fun x -> l === list [x]) in
 
-  test_l ~n:1 @@
+  test_l ~n:5 @@
     run q (fun q ->
       Fresh.three (fun a b c ->
         findo p q (list [list [a; b]; list [!!1]; list [c]; nil ()])
@@ -74,7 +85,32 @@ let _ =
       )
     );
 
-  test_ll ~n:1 @@
+  test_ll ~n:5 @@
+    run q (fun q ->
+      Fresh.three (fun a b c ->
+        removeo p (list [list [a; b]; list [!!1]; list [c]; nil ()])
+                  (list [list [a; b]; list [c]; nil ()])
+      )
+    );
+
+  test_ll ~n:5 @@
+    run q (fun q ->
+      Fresh.three (fun a b c ->
+        removeo p (list [list [a; b]; list [!!1]; list [c]; nil ()]) q
+      )
+    );
+
+  test_ll ~n:5 @@
+    run q (fun q ->
+      removeo p q q
+    );
+
+  test_ll ~n:5 @@
+    run q (fun q ->
+      removeo p q (list [nil ()])
+    );
+
+  test_ll ~n:5 @@
     run q (fun q ->
       Fresh.three (fun a b c ->
         filtero p (list [list [a; b]; list [c]; list [!!1]; nil ()])
@@ -82,7 +118,7 @@ let _ =
       )
     );
 
-  test_ll ~n:1 @@
+  test_ll ~n:5 @@
     run q (fun q ->
       Fresh.three (fun a b c ->
         filtero p (list [list [a; b]; list [c]; list [!!1]; nil ()]) q
