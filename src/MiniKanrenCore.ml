@@ -84,11 +84,11 @@ module Log =
 
 module Stream =
   struct
-    type 'a h =
+    type 'a s =
       | Nil
-      | Cons of 'a * ('a h)
-      | Cont of 'a * ('a -> 'a t) * ('a h)
-    and 'a t = int -> 'a h
+      | Cons of 'a * ('a s)
+      | Cont of 'a * ('a -> 'a t) * ('a s)
+    and 'a t = int -> 'a s
       (* | Thunk  of 'a thunk *)
       (* | Waiting of 'a suspended list *)
     (* and 'a thunk =
@@ -96,40 +96,53 @@ module Stream =
     (* and 'a suspended =
       {is_ready: unit -> bool; zz: 'a thunk} *)
 
-    let nil         = fun _ -> Nil
-    let single x    = fun _ -> Cons (x, Nil)
-    let cons x s    = fun i -> Cons (x, s i)
+    let nil         = Nil
+    let single x    = Cons (x, Nil)
+    let cons x s    = Cons (x, s)
     (* let from_fun zz = fun i -> Thunk (zz i) *)
 
-    let rec deepen s i =
-      match s with
+    let rec of_list = function
+      | []    -> nil
+      | x::xs -> cons x (of_list xs)
+
+    let mplus xs ys =
+      match xs with
+      | Nil             -> ys
+      | Cons (x, xs)    -> Cons (x, mplus ys xs)
+      | Cont (x, k, xs) -> Cont (x, k, mplus ys xs)
+
+    let bind xs f =
+      match xs with
       | Nil             -> Nil
-      | Cons (x, xs)    -> Cons (x, xs)
-      | Cont (t, k, xs) ->
-        if i == 0 then
-          Cont (t, k, xs)
-        else
-          deepen (mplus (k t (i-1)) xs) (i-1)
-      (* | Thunk zz        -> from_fun (fun () -> deepen (zz ()) i) *)
+      | Cons (x, xs)    -> mplus (f x) (bind xs f)
+      | Cont (x, k, xs) ->
+        Cont (x, fun x i -> bind (f x) (fun x -> k x i), bind xs f)
+
+    let rec deepen xs i =
+      if i = 0 then xs else
+        match xs with
+        | Nil             -> Nil
+        | Cons (x, xs)    -> Cons (x, deepen xs i)
+        | Cont (x, k, xs) -> mplus (k x (i-1)) (xs deepen xs i)
 
     let from_cont g t = fun i -> depeen (Cont (t, g, Nil)) i
 
-    (* let suspend ~is_ready f = Waiting [{is_ready; zz=f}] *)
+    let implus xs ys = fun i -> mplus (xs i) (ys i)
 
-    let rec of_list = function
-    | []    -> nil
-    | x::xs -> cons x (of_list xs)
+    let ibind xs f = fun i -> bind (xs i) (fun x -> f x i)
+
+    (* let suspend ~is_ready f = Waiting [{is_ready; zz=f}] *)
 
     (* let force = function
     | Thunk zz  -> zz ()
     (* | Cont (t, k) -> k t *)
     | xs        -> xs *)
 
-    let rec mplus xs ys i =
-      match xs i with
-      | Nil             -> ys i
-      | Cons (x, xs)    -> Cons (x, mplus ys (deepen xs) i)
-      | Cont (t, k, xs) -> Cont (t, k, mplus ys (deepen xs) i)
+(*    let rec mplus xs ys i =*)
+(*      match xs i with*)
+(*      | Nil             -> ys i*)
+(*      | Cons (x, xs)    -> Cons (x, mplus ys (deepen xs) i)*)
+(*      | Cont (t, k, xs) -> Cont (t, k, mplus ys (deepen xs) i)*)
       (* | Thunk   _       -> from_fun (fun () -> mplus (force ys) xs) *)
 
       (* | Waiting ss    ->
@@ -157,11 +170,11 @@ module Stream =
         | Some s, ss -> mplus (force s) @@ Waiting ss
         | None , ss  -> Waiting ss *)
 
-    let rec bind s f i =
-      match s i with
-      | Nil             -> Nil
-      | Cons (x, xs)    -> mplus (f x)          (bind (deepen xs) f) i
-      | Cont (t, k, xs) -> mplus (bind (k t) f) (bind (deepen xs) f) i
+(*    let rec bind s f i =*)
+(*      match s i with*)
+(*      | Nil             -> Nil*)
+(*      | Cons (x, xs)    -> mplus (f x)          (bind (deepen xs) f) i*)
+(*      | Cont (t, k, xs) -> mplus (bind (k t) f) (bind (deepen xs) f) i*)
       (* | Thunk zz        -> from_fun (fun () -> bind (zz ()) f) *)
       (* | Waiting ss    ->
         match unwrap_suspended ss with
@@ -170,11 +183,11 @@ module Stream =
           Waiting (List.map helper ss)
         | s          -> bind s f *)
 
-    let rec sbind s f i =
-      match s i with
-      | Nil             -> Nil
-      | Cons (x, xs)    -> mplus (f x)          (bind (deepen xs) f) i
-      | Cont (t, k, xs) -> mplus (bind (f t) k) (bind (deepen xs) f) i
+(*    let rec sbind s f i =*)
+(*      match s i with*)
+(*      | Nil             -> Nil*)
+(*      | Cons (x, xs)    -> mplus (f x)          (bind (deepen xs) f) i*)
+(*      | Cont (t, k, xs) -> mplus (bind (f t) k) (bind (deepen xs) f) i*)
       (* | Thunk zz        -> from_fun (fun () -> bind (zz ()) f)
       (* | Disj (a, b)   -> Disj (from_fun (fun () -> bind a f), from_fun @@ fun () -> bind b f) *)
       | Waiting ss    ->
@@ -185,8 +198,8 @@ module Stream =
         | s          -> bind s f *)
 
     let rec msplit = function
-    | Nil           -> None
-    | Cons (x, xs)  -> Some (x, xs)
+    | Nil             -> None
+    | Cons (x, xs)    -> Some (x, xs)
     (* | Thunk zz      -> msplit @@ zz ()
     | Waiting ss    ->
       match unwrap_suspended ss with
@@ -201,12 +214,13 @@ module Stream =
     let rec map f = function
     | Nil             -> Nil
     | Cons (x, xs)    -> Cons (f x, map f xs)
-    | Cont (t, k, xs) -> mplus (map f (k t)) (from_fun (fun () -> map f xs))
-    | Thunk zz        -> from_fun (fun () -> map f @@ zz ())
-    (* | Disj (a, b)     -> map f @@ mplus a b *)
-    | Waiting ss   ->
-      let helper {zz} as s = {s with zz = fun () -> map f (zz ())} in
-      Waiting (List.map helper ss)
+    | Cont (x, k, xs) -> mplus (map f (k x)) (map f xs)
+
+    let imap xs = fun i -> map f (xs i)
+(*    | Thunk zz        -> from_fun (fun () -> map f @@ zz ())*)
+(*    | Waiting ss   ->*)
+(*      let helper {zz} as s = {s with zz = fun () -> map f (zz ())} in*)
+(*      Waiting (List.map helper ss)*)
 
     let rec iter f s =
       match msplit s with
@@ -243,7 +257,7 @@ module Stream =
       if n = 0
       then [], s
       else match msplit s with
-      | None          -> [], Nil
+      | None         -> [], Nil
       | Some (x, s)  -> let xs, s = retrieve ~n:(n-1) s in x::xs, s
 
     let take ?n s = fst @@ retrieve ?n s
@@ -1525,7 +1539,7 @@ module State :
 
 type 'a goal' = State.t -> 'a
 
-type goal = State.t Stream.t goal'
+type goal = (int -> State.t Stream.s) goal'
 
 let success st = Stream.single st
 let failure _  = Stream.nil
