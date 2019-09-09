@@ -3,6 +3,6 @@
  (libraries dune.configurator))
 
 (rule
-  (targets camlp5-flags)
+  (targets camlp5-flags gt-flags)
   (action (run ./discover.exe))
 )
