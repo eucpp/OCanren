@@ -3,11 +3,9 @@
 (library
   (name ocanren)
   (libraries GT GT.syntax.all)
-  (flags (:standard -w -9-32-27-39-7-8-33-34-26 -rectypes))
+  (flags (:standard -w -9-32-27-39-7-8-33-34-26-50 -rectypes))
   (preprocess
-    (action (run camlp5 %{input-file}))
-    ; (action (run camlp5 -I /home/evgeniy/.opam/4.07.0+fp+flambda/lib/camlp5 -I /home/evgeniy/.opam/4.07.0+fp+flambda/lib/base/caml -I /home/evgeniy/.opam/4.07.0+fp+flambda/lib/base/shadow_stdlib -I /home/evgeniy/.opam/4.07.0+fp+flambda/lib/sexplib0 -I /home/evgeniy/.opam/4.07.0+fp+flambda/lib/base -I /home/evgeniy/.opam/4.07.0+fp+flambda/lib/ocaml/compiler-libs -I /home/evgeniy/.opam/4.07.0+fp+flambda/lib/ocaml/compiler-libs -I /home/evgeniy/.opam/4.07.0+fp+flambda/lib/ocaml-compiler-libs/common -I /home/evgeniy/.opam/4.07.0+fp+flambda/lib/ocaml-compiler-libs/shadow -I /home/evgeniy/.opam/4.07.0+fp+flambda/lib/ppx_derivers -I /home/evgeniy/.opam/4.07.0+fp+flambda/lib/result -I /home/evgeniy/.opam/4.07.0+fp+flambda/lib/ocaml-migrate-parsetree -I /home/evgeniy/.opam/4.07.0+fp+flambda/lib/ppxlib/ast -I /home/evgeniy/.opam/4.07.0+fp+flambda/lib/ppxlib/print_diff -I /home/evgeniy/.opam/4.07.0+fp+flambda/lib/ppxlib/traverse_builtins -I /home/evgeniy/.opam/4.07.0+fp+flambda/lib/stdio -I /home/evgeniy/.opam/4.07.0+fp+flambda/lib/ppxlib -I /home/evgeniy/.opam/4.07.0+fp+flambda/lib/ocamlgraph -I /home/evgeniy/.opam/4.07.0+fp+flambda/lib/GT -I /home/evgeniy/.opam/4.07.0+fp+flambda/lib/GT pa_o.cmo pa_op.cmo pr_dump.cmo caml.cma shadow_stdlib.cma sexplib0.cma base.cma ocamlcommon.cma ocaml_common.cma ocaml_shadow.cma ppx_derivers.cma result.cma migrate_parsetree.cma ppxlib_ast.cma ppxlib_print_diff.cma ppxlib_traverse_builtins.cma stdio.cma ppxlib.cma graph.cma GTCommon.cma pa_gt.cma compare.cmo eq.cmo foldl.cmo foldr.cmo gmap.cmo eval.cmo show.cmo gfmt.cmo html.cmo stateful.cmo hash.cmo %{input-file}))
-    ; (action "camp5")
+    (action (run camlp5 %{read-lines:../config/camlp5-flags} %{input-file}))
   )
 )
 
