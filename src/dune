@@ -1,7 +1,8 @@
 (include_subdirs unqualified)
 
 (library
-  (name ocanren)
+  (name OCanren)
+  (public_name OCanren)
   (libraries GT GT.syntax.all)
   (flags (:standard -warn-error -A -rectypes))
   (preprocess

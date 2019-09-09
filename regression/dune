@@ -1,0 +1,33 @@
+(tests
+  (names
+    test000
+;    test001
+;    test002sort
+;    test004
+;    test005
+;    test006
+;    test007
+;    test009
+;    test010
+;    test011
+;    test013
+;    test014
+;    test015runaway
+;    test016sorto
+;    test017tabling
+;    test018prjc
+;    test019tablingCache
+;    test020
+  )
+  (libraries GT GT.syntax.all logger OCanren)
+  (flags (:standard -warn-error -A -rectypes))
+  (preprocess
+    (action
+      (run camlp5
+        %{read-lines:../config/camlp5-flags}
+        %{read-lines:../config/gt-flags}
+        %{read-lines:../config/logger-flags}
+        %{input-file})
+    )
+  )
+)

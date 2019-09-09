@@ -15,7 +15,12 @@ let () =
       Cfg.Process.run_capture_exn cfg
         "ocamlfind" ["query"; "-pp"; "camlp5"; "-a-format"; "-predicates"; "byte"; "GT,GT.syntax.all"]
     in
+    let logger_archives =
+      Cfg.Process.run_capture_exn cfg
+        "ocamlfind" ["query"; "-pp"; "camlp5"; "-a-format"; "-predicates"; "byte"; "logger,logger.syntax"]
+    in
     let extract = Cfg.Flags.extract_comma_space_separated_words in
     Cfg.Flags.write_lines "camlp5-flags" camlp5_archives;
-    Cfg.Flags.write_lines "gt-flags" @@ extract gt_archives
+    Cfg.Flags.write_lines "gt-flags" @@ extract gt_archives;
+    Cfg.Flags.write_lines "logger-flags" @@ extract logger_archives
   )
