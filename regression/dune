@@ -1,4 +1,4 @@
-(tests
+(executables
   (names
     test000
 ;    test001
@@ -19,7 +19,7 @@
 ;    test019tablingCache
 ;    test020
   )
-  (libraries GT GT.syntax.all logger OCanren)
+  (libraries GT OCanren)
   (flags (:standard -warn-error -A -rectypes))
   (preprocess
     (action
@@ -29,5 +29,14 @@
         %{read-lines:../config/logger-flags}
         %{input-file})
     )
+  )
+)
+
+(rule
+  (target test000.log)
+  (deps test000.exe)
+  (mode promote-until-clean)
+  (action
+    (with-stdout-to test000.log (run ./test000.exe))
   )
 )
