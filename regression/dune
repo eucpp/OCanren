@@ -1,8 +1,8 @@
 (executables
   (names
     test000
-;    test001
-;    test002sort
+    test001
+    test002sort
 ;    test004
 ;    test005
 ;    test006
@@ -27,9 +27,15 @@
         %{read-lines:../config/camlp5-flags}
         %{read-lines:../config/gt-flags}
         %{read-lines:../config/logger-flags}
+        %{workspace_root}/camlp5/pa_ocanren.cma
         %{input-file})
     )
   )
+)
+
+(alias
+  (name tests)
+  (deps test000.exe test001.exe test002sort.exe)
 )
 
 (include dune.tests.gen)
