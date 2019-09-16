@@ -32,11 +32,4 @@
   )
 )
 
-(rule
-  (target test000.log)
-  (deps test000.exe)
-  (mode promote-until-clean)
-  (action
-    (with-stdout-to test000.log (run ./test000.exe))
-  )
-)
+(include dune.tests.gen)

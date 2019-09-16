@@ -1,9 +1,23 @@
 (executable
   (name discover)
+  (modules Discover)
   (libraries dune.configurator)
+)
+
+(executable
+  (name dunegen)
+  (modules Dunegen)
+  (libraries str)
 )
 
 (rule
   (targets camlp5-flags gt-flags logger-flags)
   (action (run ./discover.exe))
+)
+
+(rule
+  (targets dune.tests.gen)
+  (deps dune.tests.log.tpl)
+  (mode (promote-into ../regression))
+  (action (run ./dunegen.exe))
 )
