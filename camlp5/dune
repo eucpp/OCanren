@@ -1,5 +1,6 @@
 (library
   (name pa_ocanren)
+  (public_name OCanren.syntax)
   (libraries camlp5)
   (flags (:standard -warn-error -A -rectypes))
   (preprocess
