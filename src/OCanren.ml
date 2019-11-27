@@ -21,6 +21,8 @@ include Core
 
 module Stream = RStream
 
+module VarEnv = VarEnv
+
 module Std =
   struct
 

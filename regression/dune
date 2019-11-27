@@ -1,8 +1,8 @@
 (executables
   (names
     test000
-    test001
-    test002sort
+;    test001
+;    test002sort
 ;    test004
 ;    test005
 ;    test006
@@ -34,9 +34,9 @@
   (preprocessor_deps (file %{workspace_root}/camlp5/pa_ocanren.cma))
 )
 
-(alias
-  (name tests)
-  (deps test000.exe test001.exe test002sort.exe)
+(rule
+  (alias tests)
+  (action (run %{workspace_root}/regression/test000.exe))
 )
 
 ;(include dune.tests.gen)
