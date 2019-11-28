@@ -8,3 +8,9 @@
     )
   )
 )
+
+(rule
+  (alias promote-%{test})
+  (deps %{test}.log)
+  (action (bash cp %{test}.log %{project_root}/regression/orig/%{test}.log))
+)

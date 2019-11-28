@@ -1,11 +1,18 @@
 (rule
   (target test000.diff)
-  (deps ./test.sh test000.log ./orig/test000.log)
+  (deps ./test.sh test000.log ./orig/test000.orig)
   (mode promote-until-clean)
   (action
     (with-accepted-exit-codes (or 0 1)
-      (run ./test.sh test000 ./orig/test000.log ./test000.log %{target})
+      (run ./test.sh test000 ./orig/test000.orig ./test000.log %{target})
     )
   )
 )
 
+(rule
+  (alias promote-test000)
+  (target test000.orig)
+  (deps test000.log)
+  (mode (promote (into orig)))
+  (action (copy test000.log test000.orig))
+)
