@@ -15,7 +15,7 @@ let testnames =
   [ "test000" ]
 
 let insert_testname tpl testname =
-  let re = Str.regexp "%test" in
+  let re = Str.regexp "%{test}" in
   Str.global_replace re testname tpl
 
 let generate_testrules (tpl_fn, gen_fn) =
