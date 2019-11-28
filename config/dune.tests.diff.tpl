@@ -1,16 +1,28 @@
 (rule
+  (target %{test}.log)
+  (deps %{test}.exe)
+  (mode promote-until-clean)
+  (action
+    (with-stdout-to %{test}.log (run ./%{test}.exe))
+  )
+)
+
+(rule
   (target %{test}.diff)
-  (deps ./test.sh %{test}.log ./orig/%{test}.log)
+  (deps ./test.sh %{test}.log ./orig/%{test}.orig)
   (mode promote-until-clean)
   (action
     (with-accepted-exit-codes (or 0 1)
-      (run ./test.sh %{test} ./orig/%{test}.log ./%{test}.log %{target})
+      (run ./test.sh %{test} ./orig/%{test}.orig ./%{test}.log %{target})
     )
   )
 )
 
 (rule
   (alias promote-%{test})
+  (target %{test}.orig)
   (deps %{test}.log)
-  (action (bash cp %{test}.log %{project_root}/regression/orig/%{test}.log))
+  (mode (promote (into orig)))
+  (action (copy %{test}.log %{test}.orig))
 )
+

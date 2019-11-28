@@ -1,3 +1,7 @@
+let project_root = Array.get Sys.argv 1
+
+let () =
+  Printf.printf "Project root is: %s\n" project_root
 
 (* pretty dumb file reading *)
 let read_file fn =
@@ -11,14 +15,36 @@ let read_file fn =
   let lines = List.rev @@ helper [] in
   String.concat "\n" lines
 
-let testnames =
-  [ "test000" ]
+let string_match re s = Str.string_match re s 0
+
+let match_fn_ext fn ext =
+  String.equal ext @@ Filename.extension fn
+
+let get_testnames () =
+  let re = Str.regexp "test*" in
+  let check_fn fn =
+       (string_match re fn)
+    && (match_fn_ext fn ".ml")
+    && (not @@ match_fn_ext (Filename.remove_extension fn) ".pp")
+    && (not @@ String.equal fn "tester.ml")
+  in
+  let tests_dir =
+    String.concat Filename.dir_sep [project_root; "regression"]
+  in
+     Sys.readdir tests_dir
+  |> Array.to_list
+  |> List.filter check_fn
+  |> List.map Filename.remove_extension
+
+let testnames = get_testnames ()
 
 let insert_testname tpl testname =
   let re = Str.regexp "%{test}" in
   Str.global_replace re testname tpl
 
-let generate_testrules (tpl_fn, gen_fn) =
+let generate_diffrules () =
+  let tpl_fn = "dune.tests.diff.tpl" in
+  let gen_fn = "dune.tests.diff.gen" in
   let tpl = read_file tpl_fn in
   let rules = List.map (insert_testname tpl) testnames in
   let content = String.concat "\n" rules in
@@ -26,10 +52,8 @@ let generate_testrules (tpl_fn, gen_fn) =
   output_string ochan content
 
 let generate () =
-  let log_fns = ("dune.tests.log.tpl", "dune.tests.log.gen") in
-  let diff_fns = ("dune.tests.diff.tpl", "dune.tests.diff.gen") in
-  let fns = [log_fns; diff_fns] in
-  List.iter generate_testrules fns
+
+  generate_diffrules ()
 
 let () =
   generate ()
