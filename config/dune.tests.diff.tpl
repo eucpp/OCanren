@@ -1,8 +1,10 @@
 (rule
   (target %test.diff)
-  (deps %test.exe %test.log orig/%test.log)
+  (deps ./test.sh %test.log ./orig/%test.log)
   (mode promote-until-clean)
   (action
-    (with-stdout-to %test.diff (diff ./%test.exe %test.log))
+    (with-accepted-exit-codes (or 0 1)
+      (run ./test.sh %test ./orig/%test.log ./%test.log %{target})
+    )
   )
 )

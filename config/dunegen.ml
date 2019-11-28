@@ -11,14 +11,25 @@ let read_file fn =
   let lines = List.rev @@ helper [] in
   String.concat "\n" lines
 
-let gen_tests () =
-  let tests = ["test000"] in
-  let tpl = read_file "dune.tests.log.tpl" in
+let testnames =
+  [ "test000" ]
+
+let insert_testname tpl testname =
   let re = Str.regexp "%test" in
-  let genrule s = Str.global_replace re s tpl in
-  let content = String.concat "\n" @@ List.map genrule tests in
-  let ochan = open_out "dune.tests.gen" in
+  Str.global_replace re testname tpl
+
+let generate_testrules (tpl_fn, gen_fn) =
+  let tpl = read_file tpl_fn in
+  let rules = List.map (insert_testname tpl) testnames in
+  let content = String.concat "\n" rules in
+  let ochan = open_out gen_fn in
   output_string ochan content
 
+let generate () =
+  let log_fns = ("dune.tests.log.tpl", "dune.tests.log.gen") in
+  let diff_fns = ("dune.tests.diff.tpl", "dune.tests.diff.gen") in
+  let fns = [log_fns; diff_fns] in
+  List.iter generate_testrules fns
+
 let () =
-  gen_tests ()
+  generate ()

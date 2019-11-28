@@ -1,0 +1,10 @@
+(rule
+  (target test000.diff)
+  (deps ./test.sh test000.log ./orig/test000.log)
+  (mode promote-until-clean)
+  (action
+    (with-accepted-exit-codes (or 0 1)
+      (run ./test.sh test000 ./orig/test000.log ./test000.log %{target})
+    )
+  )
+)

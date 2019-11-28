@@ -36,7 +36,8 @@
 
 (rule
   (alias tests)
-  (action (run %{workspace_root}/regression/test000.exe))
+  (action (run ./test000.exe))
 )
 
-;(include dune.tests.gen)
+(include dune.tests.log.gen)
+(include dune.tests.diff.gen)
