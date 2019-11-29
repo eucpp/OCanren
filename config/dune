@@ -16,8 +16,8 @@
 )
 
 (rule
-  (targets dune.tests.diff.gen)
-  (deps dune.tests.diff.tpl (source_tree ../regression))
+  (targets dune.tests.gen)
+  (deps dune.tests.tpl dune.runtest.tpl (source_tree ../regression))
   (mode (promote-into ../regression))
   (action (run ./dunegen.exe %{project_root}))
 )

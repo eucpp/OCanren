@@ -8,6 +8,7 @@
 )
 
 (rule
+  (alias run-%{test})
   (target %{test}.diff)
   (deps ./test.sh %{test}.log ./orig/%{test}.orig)
   (mode promote-until-clean)
