@@ -1,7 +1,8 @@
 (executable
   (name discover)
   (modules Discover)
-  (libraries dune.configurator)
+  (libraries str dune.configurator)
+  (flags (:standard -warn-error -A))
 )
 
 (executable
@@ -13,6 +14,13 @@
 (rule
   (targets camlp5-flags.cfg gt-flags.cfg logger-flags.cfg)
   (action (run ./discover.exe -all-flags))
+)
+
+(rule
+  (targets tests.txt tests.dune)
+  (deps tests.dune.tpl (source_tree ../regression))
+  (mode (promote-into ../regression))
+  (action (run ./discover.exe -tests -tests-dune -tests-dir %{project_root}/regression))
 )
 
 (rule
