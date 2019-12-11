@@ -5,12 +5,6 @@
   (flags (:standard -warn-error -A))
 )
 
-(executable
-  (name dunegen)
-  (modules Dunegen)
-  (libraries str)
-)
-
 (rule
   (targets camlp5-flags.cfg gt-flags.cfg logger-flags.cfg)
   (action (run ./discover.exe -all-flags))
@@ -21,11 +15,4 @@
   (deps tests.dune.tpl (source_tree ../regression))
   (mode (promote-into ../regression))
   (action (run ./discover.exe -tests -tests-dune -tests-dir %{project_root}/regression))
-)
-
-(rule
-  (targets dune.tests.gen)
-  (deps dune.tests.tpl dune.runtest.tpl (source_tree ../regression))
-  (mode (promote-into ../regression))
-  (action (run ./dunegen.exe %{project_root}))
 )
