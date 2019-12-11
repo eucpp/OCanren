@@ -29,7 +29,7 @@ let rec lookupo d stations q =
       ((d' === d &&& (some q' === q)) |||
        (Nat.(<) d' d &&& lookupo d ss q) |||
        (Nat.(>) d' d &&& (q === none ()))
-      )    
+      )
     )
   ]
 
