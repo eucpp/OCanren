@@ -11,8 +11,8 @@
 )
 
 (rule
-  (targets camlp5-flags gt-flags logger-flags)
-  (action (run ./discover.exe))
+  (targets camlp5-flags.cfg gt-flags.cfg logger-flags.cfg)
+  (action (run ./discover.exe -all-flags))
 )
 
 (rule
