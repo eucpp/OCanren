@@ -1,0 +1,26 @@
+(library
+  (name ppx_ocanren)
+  (public_name OCanren.ppx)
+  (kind ppx_rewriter)
+  (libraries base ppxlib)
+  (modules ppx_fresh)
+  (flags (:standard -warn-error -A -rectypes))
+  (preprocess (pps ppxlib.metaquot))
+)
+
+(executable
+  (name pp_fresh)
+  (public_name pp_ocanren)
+  (libraries ppx_ocanren)
+  (modules pp_fresh)
+)
+
+(library
+  (name ppx_repr)
+  (public_name OCanren.repr)
+  (kind ppx_rewriter)
+  (libraries base ppxlib)
+  (modules ppx_repr)
+  (flags (:standard -warn-error -A -rectypes))
+  (preprocess (pps ppxlib.metaquot))
+)
