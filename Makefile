@@ -1,13 +1,10 @@
 MKDIR ?= mkdir -vp
 CP    ?= cp
 
-#	all clean install uninstall \
-#	lib syntax package \
-#	test tests samples promote promote-all clean-tests
-
 .PHONY: \
 	all clean \
 	lib syntax package \
+	test promote clean-tests \
 	samples clean-samples
 
 .DEFAULT_GOAL: all
@@ -25,6 +22,9 @@ syntax:
 
 samples:
 	dune build @samples
+
+clean-tests:
+	rm -f regression/*.log regression/*.diff
 
 clean-samples:
 	rm -f samples/*.log samples/*.diff
