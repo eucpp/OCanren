@@ -20,6 +20,12 @@ lib:
 syntax:
 	dune build camlp5/pa_ocanren.cma
 
+test:
+	./test.sh all
+
+promote:
+	./test.sh --promote all
+
 samples:
 	dune build @samples
 
@@ -29,5 +35,5 @@ clean-tests:
 clean-samples:
 	rm -f samples/*.log samples/*.diff
 
-clean: clean-samples
+clean: clean-tests clean-samples
 	dune clean
