@@ -43,4 +43,4 @@ type ('a, 'b, 'c, 'd) groundi = (('a, 'c) ground, ('b, 'd) logic) injected
 val pair : ('a, 'b) injected -> ('c, 'd) injected -> ('a, 'b, 'c, 'd) groundi
 
 (** Reifier *)
-val reify : (VarEnv.t -> ('a, 'b) injected -> 'b) -> (VarEnv.t -> ('c, 'd) injected -> 'd) -> VarEnv.t -> ('a, 'b, 'c, 'd) groundi -> ('b, 'd) logic
+val reify : (Env.t -> ('a, 'b) injected -> 'b) -> (Env.t -> ('c, 'd) injected -> 'd) -> Env.t -> ('a, 'b, 'c, 'd) groundi -> ('b, 'd) logic

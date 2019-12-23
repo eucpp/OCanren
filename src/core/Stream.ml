@@ -16,6 +16,9 @@
  * (enclosed in the file COPYING).
  *)
 
+(* to avoid clash with Std.List (i.e. logic list) *)
+module List = Stdlib.List
+
 type 'a t =
   | Nil
   | Cons of 'a * ('a t)
