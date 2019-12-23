@@ -1,7 +1,7 @@
 (lang dune 2.0)
 
-(name ocanren)
+(name OCanren)
 (version 0.0.2)
 
 (package
-  (name ocanren))
+  (name OCanren))
