@@ -10,6 +10,11 @@
   - [Syntax Extensions](#syntax-extensions)
   - [Run](#run)
   - [Sample](#sample)
+- [Building from sources](#building-from-sources)
+  - [Building the library](#building-the-library)
+  - [Building the syntax extensions](#building-the-syntax-extensions)
+  - [Building and running tests](#building-and-running-tests)
+  - [Building and running samples](#building-and-running-samples)
 - [More info](#more-info)
 
 # OCanren
@@ -23,22 +28,16 @@ with [disequality constraints](http://scheme2011.ucombinator.org/papers/Alvis201
 
 ## Installation
 
-OCanren can be installed using [opam](https://opam.ocaml.org/doc/Install.html) 2.x. Frist,
-install opam itself and right compiler version.
+OCanren can be installed using [opam](https://opam.ocaml.org/doc/Install.html) 2.x.
+First, install opam itself and right compiler version.
 
 - either `opam init -c 4.07.1+fp+flambda` for fresh opam installation
 - or `opam switch create 4.07.1+fp+flambda` to install right version of OCaml compiler
 - `eval $(opam env)`
 
-Then, install dependencies and `OCanren`:
+Then, install `OCanren` itself:
 
-- `opam pin add GT https://github.com/JetBrains-Research/GT.git -n -y`
-- `git clone https://github.com/JetBrains-Research/OCanren.git ocanren && cd ocanren`
-- `opam install . --deps-only --yes`
-- `make`
-- `make tests`
-
-Expected workflow: add new test to try something out.
+- `opam pin add OCanren https://github.com/JetBrains-Research/OCanren.git -y`
 
 ## OCanren vs miniKanren
 
@@ -388,6 +387,59 @@ repr
 
 There also syntax extensions for simplifyng developing data type for OCanren
 but they are not fully documented.
+
+# Building from sources
+
+This section contains instructions on how to build OCanren from sources and how to build and run tests.
+
+## Building the library
+
+OCanren uses [dune](https://dune.readthedocs.io/en/stable/) build system.
+In order to build the library only, type `dune build src`
+(alternatively, use `make lib`, which is a shortcut for the previous command).
+You can build the bytecode version of the library only by `dune build src/OCanren.cma`
+or the native version only by `dune build src/OCanren.cmxa`.
+
+## Building the syntax extensions
+
+The `ppx` syntax extensions can be built by the command `dune build ppx ppxnew` (or `make ppx`).
+The `camlp5` syntax extensions is built by the command `dune build camlp5` (or `make syntax`),
+
+## Building and running tests
+
+To build all tests type `dune build regression`.
+In order to build the single test use `dune build regression/testname.exe`.
+
+Tests can be run via the custom script `test.sh`.
+This script builds the given test, runs it, saves its output
+to the file `regression/testname.log` and compares it
+to the expected output from the `regression/orig/testname.orig` file.
+In case of the mismatch it will save the diff of two files into `regression/testname.diff`
+
+To run all tests type (while in the root folder of the project)
+`./test.sh all` (or, alternatively, `make test`).
+In order to run the single test type `./test.sh testname`
+where `testname` is the name of one of the tests from the `regression` folder.
+E.g. `./test.sh test000` will build and run `regression/test000.exe`
+producing files `regression/test000.log` and `regression/test000.diff`.
+
+It is possible to promote the output of the test and make it the new 'original'.
+In order to do that type `./test.sh --promote testname`.
+This command will copy the content of the `regression/testname.log` file into `regression/orig/testname.orig`.
+In order to promote all tests, use `./test.sh --promote all` (or `make promote`).
+
+To remove all `*.log` and `*.diff` files use `make clean-test`.
+
+## Building and running samples
+
+To build samples type `dune build samples` (or `make samples`).
+To build the single sample type `dune build samples/prog.exe` 
+where `prog` is the name of the sample.
+Samples can be run via `dune exec samples/prog.exe` 
+(e.g. `dune exec samples/tree.exe`).
+
+Also, the output of the sample can be compared to the expected one (and promoted) by the script `./test.sh`
+(e.g. `./test.sh tree` will run the sample `tree.exe` and compare its output against `samples/orig/tree.orig`).
 
 # More info
 
