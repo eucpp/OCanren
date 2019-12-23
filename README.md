@@ -410,6 +410,7 @@ The `camlp5` syntax extensions is built by the command `dune build camlp5` (or `
 ## Building and running tests
 
 To build all tests type `dune build regression`.
+
 In order to build the single test use `dune build regression/testname.exe`.
 
 Tests can be run via the custom script `test.sh`.
