@@ -397,12 +397,14 @@ This section contains instructions on how to build OCanren from sources and how 
 OCanren uses [dune](https://dune.readthedocs.io/en/stable/) build system.
 In order to build the library only, type `dune build src`
 (alternatively, use `make lib`, which is a shortcut for the previous command).
-You can build the bytecode version of the library only by `dune build src/OCanren.cma`
-or the native version only by `dune build src/OCanren.cmxa`.
+
+You can build only the bytecode version of the library by `dune build src/OCanren.cma`
+or only the native version by `dune build src/OCanren.cmxa`.
 
 ## Building the syntax extensions
 
 The `ppx` syntax extensions can be built by the command `dune build ppx ppxnew` (or `make ppx`).
+
 The `camlp5` syntax extensions is built by the command `dune build camlp5` (or `make syntax`),
 
 ## Building and running tests
