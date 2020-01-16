@@ -19,7 +19,8 @@ bug-reports: "https://github.com/jetbrains-research/ocanren/issues"
 
 depends: [
   "ocaml"
-  "dune" {>= "2.0"}
+  "dune" {>= "2.0" & build }
+  "ocamlfind" {build}
   "camlp5"
   "logger-p5" {>= "0.4.3"}
   "GT" { >= "0.2.0" }
