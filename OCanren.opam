@@ -21,7 +21,7 @@ depends: [
   "ocaml"
   "dune" {>= "2.0"}
   "camlp5"
-  "logger-p5"
+  "logger-p5" {>= "0.4.3"}
   "GT" { >= "0.2.0" }
 ]
 
