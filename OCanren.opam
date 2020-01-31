@@ -20,6 +20,7 @@ bug-reports: "https://github.com/jetbrains-research/ocanren/issues"
 depends: [
   "ocaml"
   "dune" {>= "2.0" & build }
+  "dune-configurator" { build }
   "ocamlfind" {build}
   "camlp5"
   "logger-p5" {>= "0.4.3"}
