@@ -23,7 +23,7 @@ depends: [
   "dune-configurator" { build }
   "ocamlfind" {build}
   "camlp5"
-  "logger-p5" {>= "0.4.3"}
+  "logger-p5" {= "0.4.2"}
   "GT" { >= "0.2.0" }
 ]
 
